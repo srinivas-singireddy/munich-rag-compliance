@@ -1,10 +1,29 @@
-# Python-generated files
+# Python
 __pycache__/
-*.py[oc]
-build/
-dist/
-wheels/
-*.egg-info
+*.py[cod]
+*$py.class
+.venv/
+.python-version
 
-# Virtual environments
-.venv
+# Environment
+.env
+.env.local
+
+# Data — do not commit large files
+data/raw/
+data/processed/
+*.pdf
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+
+# Notebooks
+.ipynb_checkpoints/
+
+# Logs
+*.log
+logs/
