@@ -55,6 +55,7 @@ def remove_page_artifacts(text: str) -> str:
 def clean_text(text: str) -> str:
     """Full cleaning pipeline. Apply in order."""
     text = normalize_unicode(text)
+    text = text.replace("\xad", "")  # ← add this line (remove soft hyphens)
     text = fix_ligatures(text)
     text = fix_hyphenation(text)
     text = remove_page_artifacts(text)
