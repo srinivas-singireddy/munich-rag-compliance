@@ -114,3 +114,58 @@ vs. InDesign) produce different markdown extraction outputs even from semantical
 identical documents. Real-world legal corpora always include all three.
 
 ---
+
+## L-004: Chunk token-overflow despite hard-cap enforcement
+
+**Date:** 2026-05-10
+**Phase:** Day 3 — Hierarchical chunking
+
+**What happened**
+First chunk pipeline run produced 33 chunks exceeding the 256-token hard cap,
+maximum 466 tokens. The chunker had explicit `CHILD_MAX_TOKENS = 256` and a
+`_hard_split_sentence` safety net that should have caught oversized sentences.
+On Day 4 these would have been silently truncated by the embedding model,
+degrading retrieval quality without obvious symptoms.
+
+**Investigation**
+Three iterations to find the real cause:
+
+1. **First fix attempt:** Added `effective_max = max_tokens - prefix_tokens` to
+   account for prefix overhead. Reduced max from 466 → 370 but didn't eliminate.
+
+2. **Inspected actual offending chunks.** Most started with text like
+   `"a) die betroffene Person bereits über die Informationen verfügt; b)..."`.
+   These were not multiple sentences — the German `sentence-splitter` correctly
+   identified them as single sentences containing internal enumerations. The
+   sentences themselves were 250-370 tokens.
+
+3. **Second fix attempt:** Tightened the hard-split trigger to fire at 80%
+   of effective max. Still didn't work — max stayed at 368.
+
+4. **Root cause identified:** Tokenization is **not additive** across string
+   boundaries. `count_tokens(prefix) + count_tokens(body) ≠ count_tokens(prefix + body)`
+   because subword tokenization at the boundary produces extra tokens. The chunker's
+   buffer math was estimating size based on summed components, then producing
+   final embeddings whose actual token count exceeded the cap.
+
+**Resolution**
+Rewrote `_split_into_child_chunks` to **measure final tokens, not estimate from
+buffer math**. Every flush decision now calls `count_tokens(prefix + " ".join(buffer))`
+on the actual final string. Added a guaranteed-safe `emit_chunk` function:
+if a chunk somehow still exceeds `max_tokens` after sentence packing, it
+hard-splits on token IDs and decodes back to text. By construction, every
+emitted chunk is ≤ max_tokens.
+
+Result: 836 children, max 256 tokens, zero warnings.
+
+**Takeaway**
+**Tokenization is not additive across string boundaries.** Any chunking algorithm
+that estimates final token count from component sums has a silent bug waiting
+to surface. The correct pattern is "measure-then-decide": always tokenize the
+actual final string at every decision point. Slightly slower (more tokenizer
+calls), but mathematically guaranteed.
+
+This is exactly the kind of bug that ships to production and quietly degrades
+RAG quality for months without anyone noticing. Catching it pre-Day-4 prevented
+a class of "embeddings look fine but retrieval recall is mysteriously low"
+problems we'd have spent days debugging in Week 2.

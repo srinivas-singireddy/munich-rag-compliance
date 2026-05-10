@@ -9,7 +9,7 @@ deliberately compressed for portfolio/sprint pace.
 
 | # | Title | Status | Date |
 |---|-------|--------|------|
-| 001 | _Pending — hierarchical parent-child chunking_ | Proposed | 2026-05-10 |
+| 001 | Hierarchical parent-child chunking with context-prefix injection | Accepted | 2026-05-10 |
 
 ## Conventions
 
