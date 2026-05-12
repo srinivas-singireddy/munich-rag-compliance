@@ -66,11 +66,11 @@ def _build_metadata(doc: Document, section: Section | None) -> ChunkMetadata:
             section_id=section.section_id,
             section_heading=section.heading,
             section_number=section.section_number,
+            section_numbers=section.section_numbers,  # ← forward the new field
             section_type=section.section_type,
             page_start=section.page_start,
             page_end=section.page_end,
         )
-    # Fallback: whole-document chunking, no section context
     return ChunkMetadata(
         doc_id=doc.doc_id,
         doc_title=doc.title,

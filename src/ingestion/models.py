@@ -26,11 +26,27 @@ class Language(StrEnum):
 
 
 class Section(BaseModel):
-    section_id: str = Field(..., description="Stable ID e.g. 'art_5' or 'par_25a'")
-    heading: str
-    section_number: str | None = None
+    """A logical section of a document — typically an Article (Artikel) or §."""
+
+    section_id: str = Field(
+        ...,
+        description="Stable ID, e.g. 'art_5' or 'art_13_14' for range headings.",
+    )
+    heading: str = Field(..., description="Full heading text as it appears.")
+    section_number: str | None = Field(
+        None,
+        description="Primary number (first in a range). Kept for backward compatibility.",
+    )
+    section_numbers: list[str] = Field(
+        default_factory=list,
+        description=(
+            "All article numbers this section applies to. Single-article sections "
+            "have one entry; range/list headings like 'Artikel 13-14' have multiple. "
+            "This is the field downstream code should use for filtered retrieval."
+        ),
+    )
     section_type: Literal["article", "paragraph", "recital", "chapter", "other"] = "other"
-    text: str
+    text: str = Field(..., description="Body text of the section, cleaned.")
     page_start: int = Field(..., ge=1)
     page_end: int = Field(..., ge=1)
     char_count: int = Field(..., ge=0)

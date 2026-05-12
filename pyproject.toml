@@ -20,7 +20,12 @@ dependencies = [
     "tiktoken>=0.7.0",
     "transformers>=4.40.0",
     "tokenizers>=0.20.0",
-    "sentence-splitter>=1.4",    
+    "sentence-splitter>=1.4",
+    "sentence-transformers>=3.0.0",
+    "torch>=2.4.0",
+    "qdrant-client>=1.11.0",
+    "fastembed>=0.4.0",
+    "onnxruntime>=1.20.0,<1.26.0",        
 ]
 
 [dependency-groups]
@@ -33,9 +38,7 @@ dev = [
 
 [tool.uv]
 package = false
-override-dependencies = [
-    "onnxruntime ; sys_platform == 'linux'",
-]
+
 
 [tool.ruff]
 line-length = 100

@@ -34,6 +34,10 @@ class ChunkMetadata(BaseModel):
     section_id: str | None = None
     section_heading: str | None = None
     section_number: str | None = None
+    section_numbers: list[str] = Field(
+        default_factory=list,
+        description="All article numbers this chunk covers. For filtered retrieval.",
+    )
     section_type: str | None = None
 
     # Page range — for citations back to the original PDF

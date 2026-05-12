@@ -10,6 +10,7 @@ deliberately compressed for portfolio/sprint pace.
 | # | Title | Status | Date |
 |---|-------|--------|------|
 | 001 | Hierarchical parent-child chunking with context-prefix injection | Accepted | 2026-05-10 |
+| 002 | Embedding model and vector store selection | Accepted | 2026-05-11 |
 
 ## Conventions
 
@@ -24,3 +25,4 @@ deliberately compressed for portfolio/sprint pace.
 
 - See [`../lessons-learned.md`](../lessons-learned.md) for postmortems on
   concrete bugs encountered and how they were resolved.
+
