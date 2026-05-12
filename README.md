@@ -128,6 +128,24 @@ Munich/Germany (Allianz, Munich Re, BaFin-regulated banks, Siemens, BMW).
   is the only reliable approach (see [L-004](docs/lessons-learned.md))
 
 ---
+### Day 4 — Embeddings + Qdrant Hybrid Index
+**Commit:** `feat(day4): embeddings + Qdrant hybrid index — 642 children, reconciled`
+
+- Dense embeddings via `multilingual-e5-large-instruct` (1024d) — same tokenizer as Day 3
+- Sparse BM25 vectors via `fastembed` for exact-term retrieval
+- Qdrant collection with named dense+sparse vectors, IDF modifier, payload indexes
+- E5 prefix discipline at the encoder API boundary
+- **Reconciliation discipline:** input count = indexed count, asserted at end of pipeline
+- **Three-layer defense against silent data loss:** upstream disambiguation in `structure.py`,
+  natural parent IDs in `chunker.py`, count reconciliation in `embed_and_index.py`
+- Tolerant `ARTICLE_PATTERN` accommodates PDF extraction drift across pipeline changes
+- **Result:** 178 sections detected (vs. 106 before bug-fix), 642 well-aligned children, zero loss
+
+**Key decisions:**
+- See [ADR-002](docs/adr/002-embedding-model-and-vector-store.md)
+- Counterintuitive lesson: fewer chunks (642 vs 836) with better semantic alignment beats more chunks with arbitrary text windows
+- See [L-005](docs/lessons-learned.md): three-layer silent data loss debugging story
+---
 
 ## Tech Stack
 
