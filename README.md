@@ -24,8 +24,8 @@ Munich/Germany (Allianz, Munich Re, BaFin-regulated banks, Siemens, BMW).
 | 2 | PDF extraction + German legal structure detection | ✅ Done |
 | 3 | Hierarchical parent-child chunking | ✅ Done |
 | 4 | Embeddings + Qdrant vector store | ✅ Done |
-| 5 | Hybrid search (dense + BM25) + reranker | ⬜ Planned |
-| 6 | Generation (Mistral API) + Streamlit UI | ⬜ Planned |
+| 5 | Hybrid search (dense + BM25) + reranker | ✅ Done |
+| 6 | Generation (Mistral API) + Streamlit UI | 🔄 Next |
 | 7 | Mini-evaluation + golden dataset | ⬜ Planned |
 | 8–14 | Week 2: Agents (LangGraph) + full evaluation | ⬜ Planned |
 | 15–21 | Week 3: Production hardening + EKS deployment | ⬜ Planned |
