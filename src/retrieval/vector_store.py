@@ -62,7 +62,7 @@ def ensure_collection(client: QdrantClient, recreate: bool = False) -> None:
         sparse_vectors_config={
             SPARSE_VECTOR_NAME: qm.SparseVectorParams(
                 index=qm.SparseIndexParams(on_disk=False),
-                modifier=qm.Modifier.IDF,  # standard BM25 modifier
+                # No IDF modifier — bm42 computes its own attention-weighted scores
             ),
         },
         hnsw_config=qm.HnswConfigDiff(

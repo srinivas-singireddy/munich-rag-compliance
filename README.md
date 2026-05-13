@@ -145,6 +145,7 @@ Munich/Germany (Allianz, Munich Re, BaFin-regulated banks, Siemens, BMW).
 - See [ADR-002](docs/adr/002-embedding-model-and-vector-store.md)
 - Counterintuitive lesson: fewer chunks (642 vs 836) with better semantic alignment beats more chunks with arbitrary text windows
 - See [L-005](docs/lessons-learned.md): three-layer silent data loss debugging story
+
 ---
 
 ## Tech Stack

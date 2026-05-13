@@ -24,7 +24,10 @@ log = get_logger(__name__)
 DENSE_MODEL_NAME = "intfloat/multilingual-e5-large-instruct"
 DENSE_DIM = 1024
 
-SPARSE_MODEL_NAME = "Qdrant/bm25"
+# OLD:
+# SPARSE_MODEL_NAME = "Qdrant/bm25"
+# NEW:
+SPARSE_MODEL_NAME = "Qdrant/bm42-all-minilm-l6-v2-attentions"
 
 # e5 prefixes — wrong values silently degrade retrieval quality
 PASSAGE_PREFIX = "passage: "
