@@ -183,14 +183,14 @@ Six lightweight ADRs planned for this project. See [`docs/adr/`](docs/adr/).
 | # | Decision | Status |
 |---|---|---|
 | 001 | Hierarchical parent-child chunking | ✅ Accepted |
-| 002 | Embedding model selection | 🔄 Day 4 |
-| 003 | Hybrid search strategy | 🔄 Day 5 |
+| 002 | Embedding model and vector store selection | ✅ Accepted |
+| 003 | Hybrid search strategy and reranker selection | ✅ Accepted |
 | 004 | LangGraph for agent orchestration | 🔄 Day 8 |
 | 005 | Evaluation methodology | 🔄 Day 9 |
 | 006 | Qdrant deployment on EKS | 🔄 Day 18 |
 
 ### Lessons Learned
-Four debugging postmortems documented so far. See [`docs/lessons-learned.md`](docs/lessons-learned.md).
+Seven debugging postmortems documented so far. See [`docs/lessons-learned.md`](docs/lessons-learned.md).
 
 | # | Issue | Takeaway |
 |---|---|---|
@@ -198,7 +198,9 @@ Four debugging postmortems documented so far. See [`docs/lessons-learned.md`](do
 | L-002 | `onnxruntime` Apple Silicon wheel conflict | Platform override + `--no-deps` pattern for ML dependencies |
 | L-003 | BDSG 0 sections — wrong heading format assumed | Look at the data before writing the regex |
 | L-004 | Token overflow despite hard-cap enforcement | Tokenization is not additive across string boundaries |
-
+| L-005 | Silent data loss — three-layer root cause | Reconcile input/output counts; no hash truncation; tolerant patterns |
+| L-006 | PDF margin annotations mistaken for headings | Inspect source PDF layout; Python indentation is silently load-bearing |
+| L-007 | Reranker required text_for_embedding not text_raw | Multi-stage pipelines need consistent text representations |
 ---
 
 ## Running the Pipeline
