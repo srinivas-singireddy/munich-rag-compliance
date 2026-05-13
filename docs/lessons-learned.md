@@ -10,6 +10,18 @@ Format per entry:
 - **Resolution** — what fixed it.
 - **Takeaway** — the generalizable lesson.
 
+## Index
+
+| # | Issue | Takeaway |
+|---|-------|----------|
+| L-001 | BaFin JS-rendered scraper returned 0 PDFs | Good-enough corpus beats perfect corpus you can't get |
+| L-002 | `onnxruntime` Apple Silicon wheel conflict | Platform override + `--no-deps` pattern for ML dependencies |
+| L-003 | BDSG 0 sections — wrong heading format assumed | Look at the data before writing the regex |
+| L-004 | Token overflow despite hard-cap enforcement | Tokenization is not additive across string boundaries |
+| L-005 | Silent data loss — three-layer root cause | Reconcile input/output counts; no hash truncation; tolerant patterns |
+| L-006 | PDF margin annotations mistaken for headings | Inspect source PDF layout; Python indentation is silently load-bearing |
+| L-007 | Reranker required text_for_embedding not text_raw | Multi-stage pipelines need consistent text representations across stages |
+
 ---
 
 ## L-001: BaFin Rundschreiben scraper returned zero PDFs despite live URLs
@@ -340,3 +352,50 @@ to the RAG architecture this project showcases.
   shipping with strong article-level retrieval beats chasing PDF-layout
   completeness at the cost of the broader portfolio narrative. Senior
   engineering is partly about knowing what to *not* solve right now.
+
+## L-007: Reranker required text_for_embedding not text_raw — silent quality collapse
+
+**Date:** 2026-05-13
+**Phase:** Day 5 — Hybrid search evaluation
+
+**What happened**
+Initial hybrid+rerank evaluation produced P@1=33% — far worse than dense
+baseline of 79%. The reranker was actively demoting correct results.
+
+**Investigation**
+The reranker (`bge-reranker-v2-m3`) scores `(query, chunk_text)` pairs.
+Initial implementation passed `text_raw` — the chunk body without the
+context prefix. For citation queries like "Artikel 83 Absatz 4", the raw
+chunk body contains the article's *content* but not the article's *number*.
+The prefix `[Dsgvo Official De · Artikel 83 Allgemeine Bedingungen...]`
+contains "Artikel 83" — exactly what the query is looking for — but the
+reranker never saw it.
+
+Result: the reranker saw no connection between "Artikel 83" in the query
+and the content of an Article 83 chunk. It penalised these chunks and
+promoted lower-ranked but apparently more "relevant" chunks.
+
+**Resolution**
+Changed reranker input from `text_raw` to `text_for_embedding` (which
+includes the context prefix). P@1 immediately restored to 79% — matching
+the dense baseline. The section heading in the prefix provides the
+structural signal the reranker needs to connect citation queries to the
+right article.
+
+**Also discovered:** BM25/bm42 sparse retrieval provides minimal value
+on conceptual German legal queries due to synonym richness. "Strafen"
+(penalties in query) vs "Geldbußen" (fines in corpus) have zero token
+overlap — sparse search adds noise. Hybrid helps on exact citation
+queries but hurts on conceptual ones. The reranker rescues the hybrid
+regressions on conceptual queries by re-scoring semantically.
+
+**Takeaway**
+The reranker input must match what was indexed — if chunks were indexed
+with prefixes, the reranker must see those same prefixes. Otherwise the
+reranker's relevance judgements are made on a different text representation
+than what the retrieval model used, creating a consistency gap.
+
+More broadly: in multi-stage retrieval pipelines, every stage must operate
+on *consistent text representations*. Changing the text between stages
+silently degrades quality in ways that are hard to attribute without a
+careful evaluation harness.  

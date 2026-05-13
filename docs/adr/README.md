@@ -11,6 +11,7 @@ deliberately compressed for portfolio/sprint pace.
 |---|-------|--------|------|
 | 001 | Hierarchical parent-child chunking with context-prefix injection | Accepted | 2026-05-10 |
 | 002 | Embedding model and vector store selection | Accepted | 2026-05-11 |
+| 003 | Hybrid search strategy and reranker selection | Accepted | 2026-05-13 |
 
 ## Conventions
 
