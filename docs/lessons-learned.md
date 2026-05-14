@@ -21,6 +21,7 @@ Format per entry:
 | L-005 | Silent data loss — three-layer root cause | Reconcile input/output counts; no hash truncation; tolerant patterns |
 | L-006 | PDF margin annotations mistaken for headings | Inspect source PDF layout; Python indentation is silently load-bearing |
 | L-007 | Reranker required text_for_embedding not text_raw | Multi-stage pipelines need consistent text representations across stages |
+| L-008 | mistralai v2.x broke `from mistralai import Mistral` | Pin exact major.minor for fast-moving AI SDKs |
 
 ---
 
@@ -399,3 +400,34 @@ More broadly: in multi-stage retrieval pipelines, every stage must operate
 on *consistent text representations*. Changing the text between stages
 silently degrades quality in ways that are hard to attribute without a
 careful evaluation harness.  
+
+## L-008: mistralai SDK v2.x broke `from mistralai import Mistral`
+
+**Date:** 2026-05-14  
+**Phase:** Day 6 — Generation integration
+
+### What happened
+`uv add mistralai>=1.0.0` resolved to `mistralai==2.4.5` (latest).
+`from mistralai import Mistral` raised `ImportError: cannot import name 'Mistral'`
+despite the class existing in v1.x. The v2.x SDK reorganised the package structure
+and the top-level `Mistral` import path changed.
+
+### Root cause
+mistralai did a breaking API reorganisation between v1.x and v2.x with no
+deprecation shim. `uv add mistralai>=1.0.0` satisfied the constraint with v2.4.5,
+silently pulling in the incompatible version.
+
+### Fix
+Pin explicitly in pyproject.toml:
+`mistralai==1.2.5`
+
+### Takeaway
+For any SDK that has crossed a major version boundary recently, always pin to
+the exact major.minor you verified against. `>=1.0.0` is not safe when v2.x
+exists. Check PyPI history before writing `>=` constraints on fast-moving
+AI provider SDKs (mistralai, openai, anthropic, cohere all have form here).
+
+### Upgrade path
+Before upgrading to v2.x: check mistralai changelog for the new import path,
+update generator.py accordingly, re-run `uv run python -c 'from mistralai
+import Mistral; print("ok")'` before touching anything else.
