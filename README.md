@@ -26,10 +26,11 @@ Munich/Germany (Allianz, Munich Re, BaFin-regulated banks, Siemens, BMW).
 | 4 | Embeddings + Qdrant vector store | ✅ Done |
 | 5 | Hybrid search (dense + BM25) + reranker | ✅ Done |
 | 6 | Generation (Mistral API) + Streamlit UI | ✅ Done |
-| 7 | Mini-evaluation + golden dataset | ⬜ Planned |
-| 8–14 | Week 2: Agents (LangGraph) + full evaluation | ⬜ Planned |
-| 15–21 | Week 3: Production hardening + EKS deployment | ⬜ Planned |
-
+| 7 | Mini-evaluation + golden dataset expansion | ✅ Done |
+| 8–10 | Agent orchestration (LangGraph) | ⬜ Planned |
+| 11–13 | Full evaluation harness + RAG metrics | ⬜ Planned |
+| 14–16 | MapReduce pattern — aggregate analysis | ⬜ Planned |
+| 17–21 | Production hardening + EKS deployment | ⬜ Planned |
 ---
 
 ## Architecture Overview
@@ -147,6 +148,85 @@ Munich/Germany (Allianz, Munich Re, BaFin-regulated banks, Siemens, BMW).
 - See [L-005](docs/lessons-learned.md): three-layer silent data loss debugging story
 
 ---
+### Day 5 — Hybrid Search (Dense + BM25) + Reranker
+**Commit:** `feat(day5): hybrid search + cross-encoder reranker — P@1=79% MRR=0.871`
+
+- Hybrid retrieval combining dense vectors (multilingual-e5) + sparse BM25 (fastembed BM42)
+- Cross-encoder reranker (`BAAI/bge-reranker-v2-m3`) re-scores top-40 candidates to top-10
+- Retrieval evaluation framework: Precision@1, Recall@5, MRR on 14-question golden set
+- Parent promotion: child chunk retrieved, parent context returned to LLM
+- Three retrieval strategies benchmarked: dense, hybrid, hybrid+rerank
+
+**Results (14 questions):**
+| Strategy | P@1 | R@5 | MRR |
+|---|---|---|---|
+| Dense | 79% | 100% | 0.871 |
+| Hybrid | 71% | 93% | 0.780 |
+| Hybrid + Rerank | 79% | 100% | 0.871 |
+
+**Key decisions:**
+- See [ADR-003](docs/adr/003-hybrid-search-and-reranker.md)
+- Reranker requires `text_for_embedding` (prefix-injected) not raw text — consistent
+  text representation across all pipeline stages (see [L-007](docs/lessons-learned.md))
+- BM42 sparse model outperforms classic BM25 on legal German compound terms
+
+---
+
+### Day 6 — Generation (Mistral API) + Streamlit UI
+**Commit:** `feat(day6): generation pipeline + Streamlit UI — streaming, citations, dark theme`
+
+- `ComplianceGenerator` class: system prompt engineering for citation-grounded answers
+- Streaming generation via `mistralai==1.2.5` (pinned — v2.x broke import API)
+- Streamlit UI: dark theme, strategy selector (dense/hybrid/hybrid+rerank),
+  expandable source citations panel, conversation history
+- Prompt engineering: role framing as EU compliance expert, structured citation format,
+  German/English bilingual instruction handling
+- End-to-end pipeline wired: query → retrieve → rerank → generate → stream to UI
+
+**Key decisions:**
+- See [ADR-004](docs/adr/004-prompt-engineering-generation.md)
+- Pin `mistralai==1.2.5` — v2.x changed the import structure mid-project
+  (see [L-008](docs/lessons-learned.md))
+- Streaming over batch generation — compliance users expect near-instant first token
+- Citation grounding in prompt, not post-hoc — hallucination prevention by design
+
+---
+
+### Day 7 — Mini-Evaluation + Golden Dataset Expansion
+**Commit:** `day7: expand golden set 14→25, establish eval methodology, ADR-005`
+
+- Diagnosed both Day 5 open failures with real retrieval data — both confirmed as
+  reranker-dependent passes, not corpus problems
+- Discovered DSGVO/BDSG section_id namespace collision: both corpora use `art_1`
+  through `art_86` — 8 golden questions required `expected_doc_id` scoping
+- Expanded golden set from 14 → 25 questions across 6 failure categories:
+  synonym stress, cross-lingual, specific clause, adjacent article, BDSG-specific, scope
+- Introduced `eval_mode` field: `strict` (single article) vs `cluster_any`
+  (broad queries with multiple valid answers)
+- Fixed Q5 wording: controller obligation framing pulled art_13 instead of art_15 —
+  rewrote to data subject access framing
+- Added art_49 (transfer derogations) to Q11 expected set — legitimate retrieval answer
+
+**Results (25 questions, Day 7 official baseline):**
+| Strategy | P@1 | R@5 | MRR |
+|---|---|---|---|
+| Dense | 72% | 84% | 0.768 |
+| Hybrid | 64% | 84% | 0.723 |
+| Hybrid + Rerank | **80%** | **88%** | **0.828** |
+
+Hybrid+rerank leads dense by +8% P@1 — reranker value statistically unambiguous at 25 questions.
+
+**Open failures carried to Days 11–13:**
+- Q18/Q19: English queries retrieve BDSG articles instead of DSGVO (R@5=✗) — HyDE candidate
+- Q23: German query cannot bridge to English BDSG corpus — known cross-lingual limitation
+
+**Key decisions:**
+- See [ADR-005](docs/adr/005-evaluation-methodology.md)
+- Retrieval eval and generation eval are intentionally separate scripts with separate metrics
+- Primary metric is hybrid+rerank P@1 — dense P@1 reported for diagnostics only
+- `uv run python` always — bare `python` silently picks up system interpreter
+  (see [L-009](docs/lessons-learned.md))
+---
 
 ## Tech Stack
 
@@ -185,8 +265,8 @@ Six lightweight ADRs planned for this project. See [`docs/adr/`](docs/adr/).
 | 001 | Hierarchical parent-child chunking | ✅ Accepted |
 | 002 | Embedding model and vector store selection | ✅ Accepted |
 | 003 | Hybrid search strategy and reranker selection | ✅ Accepted |
-| 004 | LangGraph for agent orchestration | 🔄 Day 8 |
-| 005 | Evaluation methodology | 🔄 Day 9 |
+| 004 | Prompt engineering and generation architecture | ✅ Accepted |
+| 005 | Evaluation methodology | ✅ Accepted |
 | 006 | Qdrant deployment on EKS | 🔄 Day 18 |
 
 ### Lessons Learned
@@ -202,6 +282,7 @@ Seven debugging postmortems documented so far. See [`docs/lessons-learned.md`](d
 | L-006 | PDF margin annotations mistaken for headings | Inspect source PDF layout; Python indentation is silently load-bearing |
 | L-007 | Reranker required text_for_embedding not text_raw | Multi-stage pipelines need consistent text representations |
 | L-008 | mistralai v2.x broke `from mistralai import Mistral` | Pin exact major.minor for fast-moving AI SDKs |
+| L-009 | `[tool.uv.env]` not supported in uv 0.11.7 | Use `.env` file for PYTHONPATH; always use `uv run python` not bare `python` |
 ---
 
 ## Running the Pipeline
@@ -223,23 +304,27 @@ uv pip install tabulate
 
 ### Run the pipeline
 
+### Run the pipeline
+
 ```bash
 # Step 1: Download corpus
-uv run python -m scripts.download_corpus
+PYTHONPATH=. uv run python -m scripts.download_corpus
 
 # Step 2: Extract + structure
-uv run python -m scripts.extract_corpus
+PYTHONPATH=. uv run python -m scripts.extract_corpus
 
 # Step 3: Chunk
-uv run python -m scripts.chunk_corpus
+PYTHONPATH=. uv run python -m scripts.chunk_corpus
 
-# Step 4: Embed + index (Day 4)
-# uv run python -m scripts.embed_and_index
+# Step 4: Embed + index
+PYTHONPATH=. uv run python -m scripts.embed_and_index
 
-# Step 5: Launch UI (Day 6)
-# uv run streamlit run src/api/app.py
+# Step 5: Run retrieval evaluation
+PYTHONPATH=. uv run python -m scripts.eval_retrieval
+
+# Step 6: Launch UI
+PYTHONPATH=. uv run streamlit run app/streamlit_app.py
 ```
-
 ---
 
 ## Related Projects

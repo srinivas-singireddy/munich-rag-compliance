@@ -22,6 +22,7 @@ Format per entry:
 | L-006 | PDF margin annotations mistaken for headings | Inspect source PDF layout; Python indentation is silently load-bearing |
 | L-007 | Reranker required text_for_embedding not text_raw | Multi-stage pipelines need consistent text representations across stages |
 | L-008 | mistralai v2.x broke `from mistralai import Mistral` | Pin exact major.minor for fast-moving AI SDKs |
+| L-009 | `[tool.uv.env]` doesn't exist; bare `python` bypasses venv | Always use `uv run python`; use `.env` for PYTHONPATH |
 
 ---
 
@@ -431,3 +432,48 @@ AI provider SDKs (mistralai, openai, anthropic, cohere all have form here).
 Before upgrading to v2.x: check mistralai changelog for the new import path,
 update generator.py accordingly, re-run `uv run python -c 'from mistralai
 import Mistral; print("ok")'` before touching anything else.
+
+
+## L-009: `[tool.uv.env]` does not exist — bare `python` silently bypasses venv
+
+**Date:** 2026-05-14
+**Phase:** Day 7 — Evaluation scripting
+
+### What happened
+`from src.embeddings.encoder import encode_query_dense` raised
+`ModuleNotFoundError: No module named 'src'` when running scripts directly.
+Attempted to fix permanently by adding `[tool.uv.env]` with `PYTHONPATH = "."`
+to `pyproject.toml`. uv 0.11.7 rejected the block at parse time:
+`unknown field 'env'` — the section does not exist in this version of uv.
+Separately, running bare `python scripts/test_query.py` instead of
+`uv run python` silently picked up the system interpreter, which has none
+of the project's declared dependencies installed.
+
+### Root cause
+Two distinct issues compounded:
+1. `[tool.uv.env]` is not a supported uv configuration key in uv 0.11.7.
+   Documentation for this feature does not exist — the field was assumed
+   from analogy with other tools.
+2. `package = false` in `[tool.uv]` means uv does not install `src` as a
+   package, so `src` is never on `sys.path` unless explicitly set.
+   Bare `python` bypasses the uv-managed virtualenv entirely.
+
+### Fix
+Two complementary fixes:
+1. Create a `.env` file in the project root with `PYTHONPATH=.` — uv
+   automatically loads `.env` on every `uv run` invocation.
+2. Always invoke scripts as `uv run python -m scripts.module_name` or
+   with `PYTHONPATH=. uv run python scripts/script.py` — never bare `python`.
+
+### Takeaway
+`uv run python` is not optional. It is the only invocation that guarantees
+the uv-managed virtualenv and environment variables are active. Bare `python`
+is silent failure mode — it appears to work until an import fails.
+Before assuming a uv config key exists, check `uv --version` and the
+uv changelog. Do not infer config schema from analogy with pip, poetry,
+or other tools — uv's config surface is smaller and more opinionated.
+
+### Upgrade path
+If a future uv version adds native `pythonpath` support in `pyproject.toml`
+(similar to `[tool.pytest.ini_options] pythonpath`), migrate from `.env`
+to the native config. Check uv release notes on major version bumps.
