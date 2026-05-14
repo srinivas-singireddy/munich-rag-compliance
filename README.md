@@ -25,7 +25,7 @@ Munich/Germany (Allianz, Munich Re, BaFin-regulated banks, Siemens, BMW).
 | 3 | Hierarchical parent-child chunking | ✅ Done |
 | 4 | Embeddings + Qdrant vector store | ✅ Done |
 | 5 | Hybrid search (dense + BM25) + reranker | ✅ Done |
-| 6 | Generation (Mistral API) + Streamlit UI | 🔄 Next |
+| 6 | Generation (Mistral API) + Streamlit UI | ✅ Done |
 | 7 | Mini-evaluation + golden dataset | ⬜ Planned |
 | 8–14 | Week 2: Agents (LangGraph) + full evaluation | ⬜ Planned |
 | 15–21 | Week 3: Production hardening + EKS deployment | ⬜ Planned |
@@ -201,6 +201,7 @@ Seven debugging postmortems documented so far. See [`docs/lessons-learned.md`](d
 | L-005 | Silent data loss — three-layer root cause | Reconcile input/output counts; no hash truncation; tolerant patterns |
 | L-006 | PDF margin annotations mistaken for headings | Inspect source PDF layout; Python indentation is silently load-bearing |
 | L-007 | Reranker required text_for_embedding not text_raw | Multi-stage pipelines need consistent text representations |
+| L-008 | mistralai v2.x broke `from mistralai import Mistral` | Pin exact major.minor for fast-moving AI SDKs |
 ---
 
 ## Running the Pipeline
