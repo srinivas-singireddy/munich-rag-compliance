@@ -27,10 +27,12 @@ Munich/Germany (Allianz, Munich Re, BaFin-regulated banks, Siemens, BMW).
 | 5 | Hybrid search (dense + BM25) + reranker | ✅ Done |
 | 6 | Generation (Mistral API) + Streamlit UI | ✅ Done |
 | 7 | Mini-evaluation + golden dataset expansion | ✅ Done |
-| 8–10 | Agent orchestration (LangGraph) | ⬜ Planned |
+| 8 | Agent orchestration — LangGraph (classifier, router, validator) | ✅ Done |
+| 9–10 | Agent orchestration — parallel multi-article retrieval | 🔄 Next |
 | 11–13 | Full evaluation harness + RAG metrics | ⬜ Planned |
 | 14–16 | MapReduce pattern — aggregate analysis | ⬜ Planned |
 | 17–21 | Production hardening + EKS deployment | ⬜ Planned |
+
 ---
 
 ## Architecture Overview
@@ -129,6 +131,7 @@ Munich/Germany (Allianz, Munich Re, BaFin-regulated banks, Siemens, BMW).
   is the only reliable approach (see [L-004](docs/lessons-learned.md))
 
 ---
+
 ### Day 4 — Embeddings + Qdrant Hybrid Index
 **Commit:** `feat(day4): embeddings + Qdrant hybrid index — 642 children, reconciled`
 
@@ -148,6 +151,7 @@ Munich/Germany (Allianz, Munich Re, BaFin-regulated banks, Siemens, BMW).
 - See [L-005](docs/lessons-learned.md): three-layer silent data loss debugging story
 
 ---
+
 ### Day 5 — Hybrid Search (Dense + BM25) + Reranker
 **Commit:** `feat(day5): hybrid search + cross-encoder reranker — P@1=79% MRR=0.871`
 
@@ -226,6 +230,49 @@ Hybrid+rerank leads dense by +8% P@1 — reranker value statistically unambiguou
 - Primary metric is hybrid+rerank P@1 — dense P@1 reported for diagnostics only
 - `uv run python` always — bare `python` silently picks up system interpreter
   (see [L-009](docs/lessons-learned.md))
+
+---
+
+### Day 8 — Agent Orchestration (LangGraph)
+**Commit:** `day8: LangGraph agent — classifier, router, citation validator, ComplianceResponse`
+
+- `src/agent/models.py` — `AgentState` TypedDict (LangGraph shared state) +
+  `ComplianceResponse` Pydantic model (typed output for all callers)
+- `src/agent/nodes.py` — five nodes: `query_classifier`, `retriever`,
+  `context_assembler`, `generator`, `citation_validator`
+- `src/agent/graph.py` — LangGraph `StateGraph`, conditional routing, `run_agent()` public API
+- `docs/adr/006-langgraph-agent-orchestration.md` — ADR accepted before implementation
+
+**Query routing:**
+| Class | Behaviour |
+|---|---|
+| `simple_rag` | Classify → Retrieve → Assemble → Generate → Validate citations |
+| `multi_article` | Same path — parallel retrieval scaffolded, completed Days 9–10 |
+| `out_of_scope` | Short-circuit at classifier — no retrieval, no generation, no LLM cost |
+
+**Smoke test results:**
+| Query | Type | Citations | Confidence |
+|---|---|---|---|
+| "What does Art. 5 DSGVO say?" | simple_rag | [] | 0.248 |
+| "Compare Art. 28 and Art. 29 DSGVO" | multi_article | [art_28, art_29] | 0.334 |
+| "What is the weather in Munich?" | out_of_scope | [] | 0.0 |
+
+**Citation validator in action:**
+- Mistral hallucinated `art_32` and `art_15` in the multi_article response
+- `citation_validator` caught and stripped both — neither was in retrieved context
+- Final citations contain only articles verifiably present in retrieved chunks
+
+**Key decisions:**
+- See [ADR-006](docs/adr/006-langgraph-agent-orchestration.md)
+- `AgentState` is a `TypedDict` not Pydantic — LangGraph requires partial state updates
+  per node; Pydantic requires all fields at construction
+- Classifier uses Mistral (same model, consistent stack) — lighter model post-EKS
+  as planned enhancement once production latency is measured
+- Only 2 of 5 nodes invoke an LLM — classifier and generator; remaining 3 are
+  deterministic Python (retriever, context_assembler, citation_validator)
+- See [L-010](docs/lessons-learned.md), [L-011](docs/lessons-learned.md),
+  [L-012](docs/lessons-learned.md)
+
 ---
 
 ## Tech Stack
@@ -243,6 +290,7 @@ Hybrid+rerank leads dense by +8% P@1 — reranker value statistically unambiguou
 | Vector DB | Qdrant (🇩🇪) | German-founded, hybrid search native |
 | Embeddings | `multilingual-e5-large-instruct` | Best open multilingual, German-strong |
 | LLM | Mistral Large (🇫🇷) | EU-sovereign, strong multilingual |
+| Agent orchestration | LangGraph 0.3.34 | Stateful graph, conditional routing, auditable |
 | Observability | Langfuse (🇩🇪) | LLM tracing, German-founded |
 | Deployment | AWS EKS + ArgoCD | Production MLOps platform (separate repo) |
 
@@ -251,14 +299,15 @@ Hybrid+rerank leads dense by +8% P@1 — reranker value statistically unambiguou
 ## Repository Structure
 
 > 🔄 Structure stabilises on Day 6. Full directory tree will be documented then.
-> Current layout: `src/` (ingestion, chunking), `scripts/`, `notebooks/`, `docs/`, `data/`.
+> Current layout: `src/` (ingestion, chunking, embeddings, retrieval, generation, agent),
+> `scripts/`, `notebooks/`, `docs/`, `data/`.
 
 ---
 
 ## Documentation
 
 ### Architecture Decision Records
-Six lightweight ADRs planned for this project. See [`docs/adr/`](docs/adr/).
+See [`docs/adr/`](docs/adr/).
 
 | # | Decision | Status |
 |---|---|---|
@@ -267,10 +316,11 @@ Six lightweight ADRs planned for this project. See [`docs/adr/`](docs/adr/).
 | 003 | Hybrid search strategy and reranker selection | ✅ Accepted |
 | 004 | Prompt engineering and generation architecture | ✅ Accepted |
 | 005 | Evaluation methodology | ✅ Accepted |
-| 006 | Qdrant deployment on EKS | 🔄 Day 18 |
+| 006 | LangGraph agent orchestration | ✅ Accepted |
+| 007 | Qdrant deployment on EKS | 🔄 Day 18 |
 
 ### Lessons Learned
-Seven debugging postmortems documented so far. See [`docs/lessons-learned.md`](docs/lessons-learned.md).
+Twelve debugging postmortems documented so far. See [`docs/lessons-learned.md`](docs/lessons-learned.md).
 
 | # | Issue | Takeaway |
 |---|---|---|
@@ -283,6 +333,10 @@ Seven debugging postmortems documented so far. See [`docs/lessons-learned.md`](d
 | L-007 | Reranker required text_for_embedding not text_raw | Multi-stage pipelines need consistent text representations |
 | L-008 | mistralai v2.x broke `from mistralai import Mistral` | Pin exact major.minor for fast-moving AI SDKs |
 | L-009 | `[tool.uv.env]` not supported in uv 0.11.7 | Use `.env` file for PYTHONPATH; always use `uv run python` not bare `python` |
+| L-010 | `RetrievalResult` fields differ from Qdrant `ScoredPoint` — assumed `.id` and `.payload` | Always grep the actual return type before wrapping existing functions |
+| L-011 | Parent `chunk_id` is top-level in `chunks_parents.jsonl`, not nested under `metadata` | Run `head -1` on jsonl files and print key structure before writing lookup logic |
+| L-012 | `uv run pip` is not venv-aware — reports against system pip, not project venv | Always use `importlib.metadata.version()` for package introspection |
+
 ---
 
 ## Running the Pipeline
@@ -304,8 +358,6 @@ uv pip install tabulate
 
 ### Run the pipeline
 
-### Run the pipeline
-
 ```bash
 # Step 1: Download corpus
 PYTHONPATH=. uv run python -m scripts.download_corpus
@@ -324,7 +376,15 @@ PYTHONPATH=. uv run python -m scripts.eval_retrieval
 
 # Step 6: Launch UI
 PYTHONPATH=. uv run streamlit run app/streamlit_app.py
+
+# Step 7: Run compliance agent (Day 8+)
+PYTHONPATH=. uv run python -c '
+from src.agent.graph import run_agent
+response = run_agent("What are the lawful bases for processing under DSGVO?")
+print(response.answer)
+'
 ```
+
 ---
 
 ## Related Projects
@@ -341,6 +401,5 @@ Daily destroy/apply ritual keeps AWS spend at ~€20/month.
 
 ## Author
 
-**Srinivas Singireddy** — Cloud & DevOps Solutions Architect  
+**Srinivas Singireddy** — Cloud & DevOps Solutions Architect
 Munich, Germany · [GitHub](https://github.com/srinivas-singireddy) · CKA certified
-

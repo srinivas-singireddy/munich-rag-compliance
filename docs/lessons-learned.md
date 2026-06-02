@@ -23,7 +23,9 @@ Format per entry:
 | L-007 | Reranker required text_for_embedding not text_raw | Multi-stage pipelines need consistent text representations across stages |
 | L-008 | mistralai v2.x broke `from mistralai import Mistral` | Pin exact major.minor for fast-moving AI SDKs |
 | L-009 | `[tool.uv.env]` doesn't exist; bare `python` bypasses venv | Always use `uv run python`; use `.env` for PYTHONPATH |
-
+| L-010 | `RetrievalResult` fields differ from Qdrant `ScoredPoint` — assumed `.id` and `.payload`, actual fields are `.chunk_id`, `.parent_id`, `.metadata` | Always `grep` the actual return type before wrapping existing functions — never assume field names from framework conventions |
+| L-011 | Parent `chunk_id` is top-level in `chunks_parents.jsonl`, not nested under `metadata` — assembler looked in wrong place | Run `head -1` on jsonl files and print key structure before writing any lookup logic against disk data |
+| L-012 | `uv run pip` is not venv-aware on this setup — `pip check` and `pip show` report against system pip, not project venv | Always use `PYTHONPATH=. uv run python -c 'import importlib.metadata; ...'` for package introspection |
 ---
 
 ## L-001: BaFin Rundschreiben scraper returned zero PDFs despite live URLs
