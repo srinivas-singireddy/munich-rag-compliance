@@ -21,6 +21,8 @@ import structlog
 
 from mistralai import Mistral
 
+from src.agent.article_parser import parse_article_refs
+from src.agent.parallel_retriever import parallel_retrieve
 from src.agent.models import AgentState, QueryType
 from src.retrieval.hybrid_search import retrieve, RetrievalResult
 from src.retrieval.vector_store import get_client
@@ -125,6 +127,9 @@ def retriever(state: AgentState) -> dict:
     """
     Retrieve relevant chunks using existing hybrid+rerank pipeline.
 
+    For simple_rag: single retrieve() call with full query.
+    For multi_article: parallel retrieve() per article reference, merged by best score.
+
     retrieve() requires a QdrantClient — we pass the module-level shared client.
     RetrievalResult is a dataclass — we serialise to plain dicts for state storage.
 
@@ -140,27 +145,27 @@ def retriever(state: AgentState) -> dict:
         return {"retrieved_chunks": []}
 
     try:
-        results: list[RetrievalResult] = retrieve(
-            client=_qdrant_client,
-            query=query,
-            strategy="hybrid+rerank",
-        )
+        if query_type == QueryType.MULTI_ARTICLE.value:
+            article_refs = parse_article_refs(query)
+            logger.info("retriever.multi_article", refs=article_refs)
 
-        # Serialise RetrievalResult dataclass to plain dict
-        # We keep only the fields downstream nodes need
-        chunks = [
-            {
-                "id": r.chunk_id,
-                "score": r.score,
-                "payload": {
-                    "section_id": r.metadata.get("section_id"),
-                    "parent_id": r.parent_id,
-                    "doc_id": r.metadata.get("doc_id"),
-                    "text_raw": r.text_raw,
-                },
-            }
-            for r in results
-        ]
+            if article_refs:
+                # One retrieve() call per article ref, concurrent via ThreadPoolExecutor
+                # Results merged: dedup by chunk_id, best score wins, sorted descending
+                chunks = parallel_retrieve(
+                    client=_qdrant_client,
+                    query=query,
+                    article_refs=article_refs,
+                    top_k=10,
+                )
+            else:
+                # Classifier said multi_article but no refs found — fall back to single retrieve()
+                logger.warning("retriever.no_refs_fallback", query=query)
+                chunks = _single_retrieve(query)
+
+        else:
+            # simple_rag — single retrieve() call, unchanged from Day 8
+            chunks = _single_retrieve(query)
 
         logger.info("retriever.done", chunk_count=len(chunks))
         return {"retrieved_chunks": chunks}
@@ -168,6 +173,28 @@ def retriever(state: AgentState) -> dict:
     except Exception as e:
         logger.error("retriever.failed", error=str(e))
         return {"retrieved_chunks": [], "error": str(e)}
+
+
+def _single_retrieve(query: str) -> list[dict]:
+    """Single retrieve() call serialised to plain dicts. Used by simple_rag path and fallback."""
+    results: list[RetrievalResult] = retrieve(
+        client=_qdrant_client,
+        query=query,
+        strategy="hybrid+rerank",
+    )
+    return [
+        {
+            "id": r.chunk_id,
+            "score": r.score,
+            "payload": {
+                "section_id": r.metadata.get("section_id"),
+                "parent_id": r.parent_id,
+                "doc_id": r.metadata.get("doc_id"),
+                "text_raw": r.text_raw,
+            },
+        }
+        for r in results
+    ]
 
 
 # ---------------------------------------------------------------------------

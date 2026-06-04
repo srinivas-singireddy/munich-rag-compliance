@@ -23,9 +23,12 @@ Format per entry:
 | L-007 | Reranker required text_for_embedding not text_raw | Multi-stage pipelines need consistent text representations across stages |
 | L-008 | mistralai v2.x broke `from mistralai import Mistral` | Pin exact major.minor for fast-moving AI SDKs |
 | L-009 | `[tool.uv.env]` doesn't exist; bare `python` bypasses venv | Always use `uv run python`; use `.env` for PYTHONPATH |
-| L-010 | `RetrievalResult` fields differ from Qdrant `ScoredPoint` — assumed `.id` and `.payload`, actual fields are `.chunk_id`, `.parent_id`, `.metadata` | Always `grep` the actual return type before wrapping existing functions — never assume field names from framework conventions |
-| L-011 | Parent `chunk_id` is top-level in `chunks_parents.jsonl`, not nested under `metadata` — assembler looked in wrong place | Run `head -1` on jsonl files and print key structure before writing any lookup logic against disk data |
-| L-012 | `uv run pip` is not venv-aware on this setup — `pip check` and `pip show` report against system pip, not project venv | Always use `PYTHONPATH=. uv run python -c 'import importlib.metadata; ...'` for package introspection |
+| L-010 | `RetrievalResult` fields differ from Qdrant `ScoredPoint` | Always grep the actual return type before wrapping existing functions |
+| L-011 | Parent `chunk_id` is top-level in `chunks_parents.jsonl`, not nested under `metadata` | Run `head -1` on jsonl files and print key structure before writing any lookup logic |
+| L-012 | `uv run pip` is not venv-aware on this setup | Always use `importlib.metadata` for package introspection |
+| L-013 | Model warmup must precede ThreadPoolExecutor | Warm all `@lru_cache` models at module import time before spawning threads |
+| L-014 | Sub-query scope determines retrieval precision | Article-scoped retrieval + topic-scoped reranking — never conflate the two |
+
 ---
 
 ## L-001: BaFin Rundschreiben scraper returned zero PDFs despite live URLs
@@ -181,11 +184,7 @@ to surface. The correct pattern is "measure-then-decide": always tokenize the
 actual final string at every decision point. Slightly slower (more tokenizer
 calls), but mathematically guaranteed.
 
-This is exactly the kind of bug that ships to production and quietly degrades
-RAG quality for months without anyone noticing. Catching it pre-Day-4 prevented
-a class of "embeddings look fine but retrieval recall is mysteriously low"
-problems we'd have spent days debugging in Week 2.
-
+---
 
 ## L-005: Silent data loss caught by reconciliation — three-layer root cause
 
@@ -218,57 +217,17 @@ revealing that `pymupdf4llm` output had also drifted between runs because
 adding `text.replace("\xad", "")` to `text_cleaning.py` reshaped line breaks
 upstream, changing which markdown heading variants downstream regex saw.
 
-What had been `## Artikel 5` style headings in earlier runs became
-`## **Artikel 5 Grundsätze...**` (combined `##` + bold + title on one line)
-after the cleaning change. The original `ARTICLE_PATTERN` no longer matched.
-Section count crashed from 20 to 4 for DSGVO.
+**Resolution**
+Three layers of defence added. Final state: 178 sections, 642 reconciled
+child chunks, every chunk corresponds to exactly one Article.
 
-**Resolution — three layers of defense**
+**Takeaway**
+Reconcile input to output counts at every batch pipeline stage. Truncated
+hashes create birthday-paradox collisions at small N. Text pipelines have
+cascading state — a cleaning change upstream can silently reshape what
+downstream stages see.
 
-1. **Upstream: disambiguate duplicates in `structure.py`.** Sections with
-   identical `(type, number)` get position-suffixed IDs (`art_13`, `art_13_b`,
-   `art_13_c`). Both physical sections preserved with unique IDs.
-2. **Middle: natural parent IDs in `chunker.py`.** Removed MD5 truncation
-   entirely. Parents now use `p_{doc_id}_{section_id}` — human-readable and
-   collision-impossible because the inputs are already unique. Bonus: easier
-   debugging since chunk IDs are readable.
-3. **Bottom: reconciliation in `embed_and_index.py`.** Pipeline now compares
-   input chunk count to indexed point count and warns loudly on mismatch.
-   This is what caught the original bug.
-
-Also widened `ARTICLE_PATTERN` and `SECTION_BOLD_PATTERN` to tolerate
-markdown-heading prefixes (`#{0,3}`) and optional bold wrappers (`\*{0,2}`)
-so future extraction drift doesn't silently regress detection.
-
-Final state: 178 sections detected (vs. 106 before), 642 well-aligned children
-indexed, every chunk corresponds to exactly one Article. Counterintuitively
-fewer chunks than before but with substantially better semantic coherence.
-
-**Takeaway — three compounding lessons**
-
-- **Reconcile input to output, always.** Every batch pipeline should compare
-  N_in to N_out and alert loudly on mismatch. This is the cheapest,
-  highest-leverage defense against silent data loss. Without it, we'd have
-  shipped 0.36% data loss to "production."
-
-- **Truncated hashes are rarely worth the bytes saved.** Modern stores handle
-  long IDs efficiently. Birthday-paradox collisions on truncated MD5 are not
-  theoretical — they hit at small N when inputs are non-uniform. If a string
-  is already unique (doc_id + section_id), don't hash it.
-
-- **Text pipelines have cascading state.** A change in one cleaning step
-  can silently reshape what downstream stages see, even though the upstream
-  library itself is deterministic. Defense: tolerant patterns, golden
-  extraction fixtures in CI, count-based smoke tests, content-hash logging
-  per stage.
-
-In production at a German bank, this exact failure pattern would have
-produced *intermittent retrieval gaps* — Article 13 queries returning Article
-14 content for the first user, Article 12 for the second, depending on which
-parent's children won the upsert race. Months of degraded answers before
-someone noticed a pattern in complaints. The reconciliation check turned a
-silent multi-month outage into a five-minute pre-deployment fix.
-
+---
 
 ## L-006: PDF margin annotations mistaken for headings
 
@@ -276,88 +235,32 @@ silent multi-month outage into a five-minute pre-deployment fix.
 **Phase:** Day 5 prep — post-Day-4 review
 
 **What happened**
-During post-Day-4 code review, noticed that several DSGVO chunks had been
-tagged with section IDs like `art_13_b`, `art_13_c`, suggesting duplicate
-section detection. Looking at the source PDF revealed headings like
-`Artikel 13–14`, `Artikel 11, 15`, `Artikel 30–31`. Initial interpretation:
-range/list headings that should produce multi-article tagging.
-
-Designed a fix: regex patterns extended to capture ranges, a
-`_expand_article_numbers` helper to expand `13–14` into `['13', '14']`, and
-a `section_numbers: list[str]` field on `Section` and `ChunkMetadata` for
-multi-article membership.
+Several DSGVO chunks tagged with `art_13_b`, `art_13_c` suggested duplicate
+section detection. Designed a range-expansion fix. After applying it,
+extraction crashed from 178 sections to 1.
 
 **Investigation**
-After applying the fix, extraction crashed from 178 sections to 1. Initial
-debugging chased regex greediness and `\s` matching newlines. Then inspection
-of the actual PDF pages revealed the real issue: these "headings" are not
-headings at all. They are **margin annotations** in a multi-column legal
-layout — left-margin cross-references attached to *recitals*
-(Erwägungsgründe), pointing to which articles each recital explains.
-
-The DSGVO has three distinct structural elements:
-- Articles (Artikel 1–99): binding legal provisions
-- Recitals ((1)–(173)): explanatory rationale, not legally binding
-- Cross-references: margin annotations linking recitals to articles
-
-`pymupdf4llm` linearizes the multi-column layout, interleaving margin text
-with main column text. Margin annotations occasionally surface as standalone
-lines that look like headings but aren't.
-
-The "Artikel 13–14" duplicate detected on Day 4 was the same phenomenon —
-not a duplicate Article heading, but a marginalia fragment masquerading as
-one. Compounded by a Python indentation bug introduced during the manual
-revert (`return sections` indented inside the for-loop), the regression
-cascaded from 178 → 4 → 1 sections.
+These "headings" are not headings — they are margin annotations in a
+multi-column legal layout, left-margin cross-references linking recitals to
+articles. `pymupdf4llm` linearizes the multi-column layout, interleaving
+margin text with main column text. A Python indentation bug introduced during
+manual revert (`return sections` indented inside the for-loop) compounded the
+regression from 178 → 4 → 1 sections.
 
 **Resolution**
-Reverted regex changes back to single-article matching. Fixed the
-indentation bug that emerged during revert. Kept the model fields
-(`section_numbers`, `_expand_article_numbers` helper, Qdrant payload index)
-because they're harmless, populated with single-entry lists today, and
-forward-compatible for future recital work.
+Reverted regex changes. Fixed indentation bug. Final state: 178 sections,
+642 child chunks, identical to Day 4 known-good baseline.
 
-Final state: 178 sections, 642 reconciled child chunks, identical to Day 4's
-known-good baseline.
+**Takeaway**
+Inspect the source PDF layout, not just the extracted text. Python indentation
+is silently load-bearing — a four-space shift on `return statements` produces
+no error but completely changes behaviour. Scope boundaries protect velocity:
+recital detection is genuine domain depth but not what differentiates this
+project.
 
-**Proper future approach (deferred, not implemented)**
-1. Detect recitals (`(N)` numbered paragraphs in DSGVO) as their own sections
-   with `section_type="recital"`.
-2. Extract margin-annotation article references via spatial PDF parsing
-   (PyMuPDF bounding boxes) since `pymupdf4llm` linearization loses the
-   column structure.
-3. Populate `section_numbers` on recitals with the articles each annotates.
-4. Add bidirectional retrieval: query for Article N → also surface recitals
-   that annotate it.
+---
 
-Deferred because spatial PDF parsing for marginalia is non-trivial — requires
-custom PyMuPDF code reading bounding boxes per page, plus heuristics linking
-column-1 annotations to column-2 paragraphs. Several days of work, tangential
-to the RAG architecture this project showcases.
-
-**Takeaways**
-
-*Three lessons compound here:*
-
-- **Look at the actual document, not just the extracted text.** L-003 was
-  about inspecting extracted markdown before writing regex. L-006 is the
-  next level — inspect the source PDF layout itself. Half a day was lost
-  designing a solution for a problem that didn't exist; five minutes
-  looking at PDF pages would have prevented it.
-
-- **Python indentation is silently load-bearing.** A four-space shift on
-  `return sections` turned a 178-section function into a 1-section
-  function. Code ran without error. Lint tools don't catch it. Defense:
-  visual review of indentation after any manual edit to functions with
-  nested control flow.
-
-- **Scope boundaries protect velocity.** Recital detection is genuine
-  domain depth, but not what differentiates this project. Reverting and
-  shipping with strong article-level retrieval beats chasing PDF-layout
-  completeness at the cost of the broader portfolio narrative. Senior
-  engineering is partly about knowing what to *not* solve right now.
-
-## L-007: Reranker required text_for_embedding not text_raw — silent quality collapse
+## L-007: Reranker required text_for_embedding not text_raw
 
 **Date:** 2026-05-13
 **Phase:** Day 5 — Hybrid search evaluation
@@ -367,115 +270,249 @@ Initial hybrid+rerank evaluation produced P@1=33% — far worse than dense
 baseline of 79%. The reranker was actively demoting correct results.
 
 **Investigation**
-The reranker (`bge-reranker-v2-m3`) scores `(query, chunk_text)` pairs.
-Initial implementation passed `text_raw` — the chunk body without the
-context prefix. For citation queries like "Artikel 83 Absatz 4", the raw
-chunk body contains the article's *content* but not the article's *number*.
-The prefix `[Dsgvo Official De · Artikel 83 Allgemeine Bedingungen...]`
-contains "Artikel 83" — exactly what the query is looking for — but the
-reranker never saw it.
-
-Result: the reranker saw no connection between "Artikel 83" in the query
-and the content of an Article 83 chunk. It penalised these chunks and
-promoted lower-ranked but apparently more "relevant" chunks.
+The reranker scored `(query, chunk_text)` pairs using `text_raw` — the chunk
+body without the context prefix. For citation queries like "Artikel 83 Absatz 4",
+the raw chunk body contains the article's content but not its number. The prefix
+`[Dsgvo Official De · Artikel 83 ...]` contains "Artikel 83" but the reranker
+never saw it.
 
 **Resolution**
-Changed reranker input from `text_raw` to `text_for_embedding` (which
-includes the context prefix). P@1 immediately restored to 79% — matching
-the dense baseline. The section heading in the prefix provides the
-structural signal the reranker needs to connect citation queries to the
-right article.
-
-**Also discovered:** BM25/bm42 sparse retrieval provides minimal value
-on conceptual German legal queries due to synonym richness. "Strafen"
-(penalties in query) vs "Geldbußen" (fines in corpus) have zero token
-overlap — sparse search adds noise. Hybrid helps on exact citation
-queries but hurts on conceptual ones. The reranker rescues the hybrid
-regressions on conceptual queries by re-scoring semantically.
+Changed reranker input from `text_raw` to `text_for_embedding`. P@1 immediately
+restored to 79%.
 
 **Takeaway**
-The reranker input must match what was indexed — if chunks were indexed
-with prefixes, the reranker must see those same prefixes. Otherwise the
-reranker's relevance judgements are made on a different text representation
-than what the retrieval model used, creating a consistency gap.
+In multi-stage retrieval pipelines, every stage must operate on consistent text
+representations. If chunks were indexed with prefixes, the reranker must see
+those same prefixes. Changing text between stages silently degrades quality.
 
-More broadly: in multi-stage retrieval pipelines, every stage must operate
-on *consistent text representations*. Changing the text between stages
-silently degrades quality in ways that are hard to attribute without a
-careful evaluation harness.  
+---
 
 ## L-008: mistralai SDK v2.x broke `from mistralai import Mistral`
 
-**Date:** 2026-05-14  
+**Date:** 2026-05-14
 **Phase:** Day 6 — Generation integration
 
-### What happened
-`uv add mistralai>=1.0.0` resolved to `mistralai==2.4.5` (latest).
-`from mistralai import Mistral` raised `ImportError: cannot import name 'Mistral'`
-despite the class existing in v1.x. The v2.x SDK reorganised the package structure
-and the top-level `Mistral` import path changed.
+**What happened**
+`uv add mistralai>=1.0.0` resolved to `mistralai==2.4.5`. `from mistralai import
+Mistral` raised `ImportError` — v2.x reorganised the package structure with no
+deprecation shim.
 
-### Root cause
-mistralai did a breaking API reorganisation between v1.x and v2.x with no
-deprecation shim. `uv add mistralai>=1.0.0` satisfied the constraint with v2.4.5,
-silently pulling in the incompatible version.
+**Resolution**
+Pin explicitly: `mistralai==1.2.5`.
 
-### Fix
-Pin explicitly in pyproject.toml:
-`mistralai==1.2.5`
+**Takeaway**
+Pin exact major.minor for fast-moving AI provider SDKs. `>=1.0.0` is not safe
+when v2.x exists. Check PyPI history before writing `>=` constraints on
+mistralai, openai, anthropic, cohere.
 
-### Takeaway
-For any SDK that has crossed a major version boundary recently, always pin to
-the exact major.minor you verified against. `>=1.0.0` is not safe when v2.x
-exists. Check PyPI history before writing `>=` constraints on fast-moving
-AI provider SDKs (mistralai, openai, anthropic, cohere all have form here).
-
-### Upgrade path
-Before upgrading to v2.x: check mistralai changelog for the new import path,
-update generator.py accordingly, re-run `uv run python -c 'from mistralai
-import Mistral; print("ok")'` before touching anything else.
-
+---
 
 ## L-009: `[tool.uv.env]` does not exist — bare `python` silently bypasses venv
 
 **Date:** 2026-05-14
 **Phase:** Day 7 — Evaluation scripting
 
-### What happened
-`from src.embeddings.encoder import encode_query_dense` raised
+**What happened**
 `ModuleNotFoundError: No module named 'src'` when running scripts directly.
-Attempted to fix permanently by adding `[tool.uv.env]` with `PYTHONPATH = "."`
-to `pyproject.toml`. uv 0.11.7 rejected the block at parse time:
-`unknown field 'env'` — the section does not exist in this version of uv.
-Separately, running bare `python scripts/test_query.py` instead of
-`uv run python` silently picked up the system interpreter, which has none
-of the project's declared dependencies installed.
+Attempted to fix via `[tool.uv.env]` in `pyproject.toml` — uv 0.11.7 rejected
+it: `unknown field 'env'`. Bare `python` silently picked up system interpreter.
 
-### Root cause
-Two distinct issues compounded:
-1. `[tool.uv.env]` is not a supported uv configuration key in uv 0.11.7.
-   Documentation for this feature does not exist — the field was assumed
-   from analogy with other tools.
-2. `package = false` in `[tool.uv]` means uv does not install `src` as a
-   package, so `src` is never on `sys.path` unless explicitly set.
-   Bare `python` bypasses the uv-managed virtualenv entirely.
+**Resolution**
+Create `.env` with `PYTHONPATH=.` — uv loads it automatically on every
+`uv run` invocation. Always invoke as `PYTHONPATH=. uv run python`, never
+bare `python`.
 
-### Fix
-Two complementary fixes:
-1. Create a `.env` file in the project root with `PYTHONPATH=.` — uv
-   automatically loads `.env` on every `uv run` invocation.
-2. Always invoke scripts as `uv run python -m scripts.module_name` or
-   with `PYTHONPATH=. uv run python scripts/script.py` — never bare `python`.
+**Takeaway**
+`uv run python` is not optional. Bare `python` is silent failure mode. Do not
+infer uv config schema from analogy with pip or poetry — uv's config surface
+is smaller and more opinionated.
 
-### Takeaway
-`uv run python` is not optional. It is the only invocation that guarantees
-the uv-managed virtualenv and environment variables are active. Bare `python`
-is silent failure mode — it appears to work until an import fails.
-Before assuming a uv config key exists, check `uv --version` and the
-uv changelog. Do not infer config schema from analogy with pip, poetry,
-or other tools — uv's config surface is smaller and more opinionated.
+---
 
-### Upgrade path
-If a future uv version adds native `pythonpath` support in `pyproject.toml`
-(similar to `[tool.pytest.ini_options] pythonpath`), migrate from `.env`
-to the native config. Check uv release notes on major version bumps.
+## L-010: `RetrievalResult` fields differ from Qdrant `ScoredPoint`
+
+**Date:** 2026-05-21
+**Phase:** Day 8 — Agent orchestration
+
+**What happened**
+The `retriever` node in `nodes.py` was written assuming `retrieve()` returned
+Qdrant `ScoredPoint` objects with `.id` and `.payload` fields — the standard
+Qdrant client return type. At runtime, attribute access failed immediately:
+`AttributeError: 'RetrievalResult' object has no attribute 'id'`.
+
+**Investigation**
+`retrieve()` in `hybrid_search.py` returns the project's own `RetrievalResult`
+dataclass, not raw Qdrant objects. The function wraps Qdrant results and
+exposes its own field names: `.chunk_id`, `.parent_id`, `.score`, `.text_raw`,
+`.metadata`. These were defined on Day 5 but assumed away on Day 8 when
+writing the agent layer on top.
+
+**Resolution**
+Grepped `hybrid_search.py` for the `RetrievalResult` definition, read the
+actual field names, updated the serialisation block in `retriever` node to
+use `.chunk_id`, `.parent_id`, `.metadata.get(...)` accordingly.
+
+**Takeaway**
+Always grep the actual return type before wrapping existing functions. Never
+assume field names from framework conventions — a function named `retrieve()`
+returning Qdrant results does not guarantee it returns raw Qdrant types.
+In multi-layer codebases, internal wrapper types accumulate; the wrapper's
+field names are the contract, not the underlying library's.
+
+---
+
+## L-011: Parent `chunk_id` is top-level in `chunks_parents.jsonl`, not nested under `metadata`
+
+**Date:** 2026-05-21
+**Phase:** Day 8 — Agent orchestration, context_assembler node
+
+**What happened**
+`context_assembler` built a lookup dict from `chunks_parents.jsonl` using
+`p["metadata"]["chunk_id"]` as the key. All lookups returned `None` —
+no parent chunks were assembled, generator received empty context, answers
+were fabricated entirely from model weights.
+
+**Investigation**
+Printed `list(p.keys())` and `list(p["metadata"].keys())` for the first line
+of the jsonl file. `chunk_id` is a top-level key on the parent object.
+`metadata` contains `doc_id`, `section_id`, `section_heading`, `doc_title` —
+not `chunk_id`. The assumption that IDs live under metadata was wrong.
+
+**Resolution**
+Changed lookup key from `p["metadata"]["chunk_id"]` to `p["chunk_id"]`.
+Context assembly immediately worked — parent chunks populated correctly.
+
+**Takeaway**
+Run `head -1` on jsonl files and print the full key structure before writing
+any lookup logic against disk data. Data first, code second. A two-line
+inspection would have prevented this entirely. The same principle applies to
+any schema you didn't personally write: API responses, database rows, Qdrant
+payloads — always verify the actual shape before writing field accessors.
+
+---
+
+## L-012: `uv run pip` is not venv-aware on this setup
+
+**Date:** 2026-05-21
+**Phase:** Day 8 — Dependency verification
+
+**What happened**
+`uv run pip show langgraph` and `uv run pip check` reported package versions
+inconsistent with what was actually importable in the project. Verification
+commands were giving false confidence about the venv state.
+
+**Investigation**
+On this setup, `uv run pip` routes to the system pip, not the uv-managed
+virtualenv. The venv pip and system pip are reporting on different package
+sets. A package installed via `uv add` appears in the venv but not in
+`uv run pip show` output.
+
+**Resolution**
+Use `importlib.metadata` for all package introspection:
+```python
+PYTHONPATH=. uv run python -c \
+  'import importlib.metadata; print(importlib.metadata.version("langgraph"))'
+```
+This runs inside the uv venv and reports the version actually importable by
+the project.
+
+**Takeaway**
+Never use `uv run pip` as a health signal on this setup. `importlib.metadata`
+is the only reliable introspection method. More broadly: verify package state
+using the same interpreter that will run the code — not a side-channel tool
+that may be pointed at a different environment.
+
+---
+
+## L-013: Model warmup must precede ThreadPoolExecutor
+
+**Date:** 2026-06-04
+**Phase:** Day 9 — Parallel multi-article retrieval
+
+**What happened**
+First smoke test of parallel retrieval dispatched two threads simultaneously.
+The `art_29` thread failed immediately:
+```
+error='mat1 and mat2 must have the same dtype, but got Half and Float'
+```
+The `art_28` thread succeeded. Both threads had hit `get_dense_model()` at
+the same timestamp, triggering concurrent model initialisation.
+
+**Investigation**
+`get_dense_model()`, `get_sparse_model()`, and `get_reranker()` all use
+`@lru_cache(maxsize=1)`. The cache is populated on the first call. When two
+threads call a cached function simultaneously before the cache is populated,
+both enter the loader concurrently. The `SentenceTransformer` loader is not
+thread-safe during weight loading — concurrent access produces a tensor dtype
+mismatch (`Half` from one thread's partial load vs `Float` from the other's
+completed load) that crashes matrix multiplication at inference time.
+
+The second smoke test added warmup for the dense and sparse models but not
+the reranker — the reranker loaded twice (once per thread) in the following
+run, confirming the same race applies to all three cached loaders.
+
+**Resolution**
+Added sequential warmup of all three models at module import time in
+`parallel_retriever.py`, before any `ThreadPoolExecutor` is initialised:
+```python
+get_dense_model()
+get_sparse_model()
+get_reranker()
+```
+After warmup, threads reference the same cached instance in memory — no
+concurrent loading, no dtype mismatch.
+
+**Takeaway**
+Any `@lru_cache` model loader is not thread-safe during its first call.
+Warm all models sequentially at module import time before spawning threads.
+This is unconditional — not just when you expect concurrent access. The
+rule: if a function uses `@lru_cache` and will be called from multiple
+threads, it must be called once on the main thread first.
+
+---
+
+## L-014: Sub-query scope determines retrieval precision
+
+**Date:** 2026-06-04
+**Phase:** Day 9 — Parallel multi-article retrieval
+
+**What happened**
+Initial parallel retrieval used `f"Art. {article_num} {base_query}"` as the
+sub-query for each thread. For a three-article query about transparency
+obligations (Art. 5, Art. 13, Art. 14), the Art. 5 thread returned zero
+Art. 5 chunks — all five results were Art. 13 and Art. 14 chunks. `art_5`
+was flagged as a hallucinated citation despite being explicitly requested.
+Confidence: 0.528, hallucinated citations: 2.
+
+**Investigation**
+The phrase "transparency and information obligations" in the base query is
+semantically dominated by Art. 13 and Art. 14 content — those articles are
+literally titled information obligations. When appended to the Art. 5
+sub-query, this topic signal overwhelmed the article number prefix in the
+embedding space. The reranker then ranked Art. 13/14 chunks above Art. 5
+chunks even inside the Art. 5 thread.
+
+A hardcoded topic suffix ("Pflichten Inhalt") was considered and rejected —
+it biases every sub-query toward obligation-style content regardless of the
+user's actual question, degrading retrieval for rights, breach notification,
+or consent queries.
+
+**Resolution**
+Changed sub-query format to `f"Artikel {article_num} DSGVO"` — article
+reference only, no topic context. The retrieval step scopes to the correct
+article; the reranker scores those chunks against the original full query.
+Two separate concerns, two separate steps.
+
+Result: 15 distinct chunks (zero overlap across threads), all three articles
+validated, zero hallucinations, confidence 0.806.
+
+**Takeaway**
+Retrieval and reranking handle two separate concerns and must not be conflated:
+- **Retrieval:** Article scoping — find chunks belonging to the target article.
+  Sub-query must be clean and article-focused.
+- **Reranking:** Topic scoring — score those chunks against the user's intent.
+  Full query belongs here, not in the retrieval step.
+
+Injecting topic context into the retrieval sub-query lets semantic noise
+override the article identity signal. The retriever finds the wrong article;
+the reranker has no way to recover because it only sees what retrieval returned.
