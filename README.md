@@ -28,7 +28,7 @@ Munich/Germany (Allianz, Munich Re, BaFin-regulated banks, Siemens, BMW).
 | 6 | Generation (Mistral API) + Streamlit UI | ✅ Done |
 | 7 | Mini-evaluation + golden dataset expansion | ✅ Done |
 | 8 | Agent orchestration — LangGraph (classifier, router, validator) | ✅ Done |
-| 9–10 | Agent orchestration — parallel multi-article retrieval | 🔄 Next |
+| 9–10 | Agent orchestration — parallel multi-article retrieval | ✅ Done |
 | 11–13 | Full evaluation harness + RAG metrics | ⬜ Planned |
 | 14–16 | MapReduce pattern — aggregate analysis | ⬜ Planned |
 | 17–21 | Production hardening + EKS deployment | ⬜ Planned |
@@ -257,21 +257,50 @@ Hybrid+rerank leads dense by +8% P@1 — reranker value statistically unambiguou
 | "Compare Art. 28 and Art. 29 DSGVO" | multi_article | [art_28, art_29] | 0.334 |
 | "What is the weather in Munich?" | out_of_scope | [] | 0.0 |
 
-**Citation validator in action:**
-- Mistral hallucinated `art_32` and `art_15` in the multi_article response
-- `citation_validator` caught and stripped both — neither was in retrieved context
-- Final citations contain only articles verifiably present in retrieved chunks
-
 **Key decisions:**
 - See [ADR-006](docs/adr/006-langgraph-agent-orchestration.md)
 - `AgentState` is a `TypedDict` not Pydantic — LangGraph requires partial state updates
   per node; Pydantic requires all fields at construction
-- Classifier uses Mistral (same model, consistent stack) — lighter model post-EKS
-  as planned enhancement once production latency is measured
 - Only 2 of 5 nodes invoke an LLM — classifier and generator; remaining 3 are
-  deterministic Python (retriever, context_assembler, citation_validator)
+  deterministic Python
 - See [L-010](docs/lessons-learned.md), [L-011](docs/lessons-learned.md),
   [L-012](docs/lessons-learned.md)
+
+---
+
+### Days 9–10 — Agent Orchestration (Parallel Multi-Article Retrieval)
+**Commit:** `day9: parallel multi-article retrieval — ADR-008, L-013, L-014`
+
+- `src/agent/article_parser.py` — regex extraction of article references from query string
+- `src/agent/parallel_retriever.py` — `ThreadPoolExecutor` concurrent `retrieve()` per
+  article reference; merge by best score, dedup by `chunk_id`
+- `src/agent/nodes.py` — retriever node branches on `query_type`:
+  `simple_rag` → single `retrieve()`; `multi_article` → parallel retrieve + merge
+- All three `@lru_cache` models warmed at module import time — eliminates
+  Half/Float dtype race condition under concurrent thread initialisation
+- Sub-query format `Artikel N DSGVO` — article-scoped retrieval, topic-scoped reranking
+
+**Design principle — separation of concerns across two stages:**
+- **Retrieval:** `Artikel N DSGVO` sub-query scopes to the correct article's chunks
+- **Reranking:** scores those chunks against the original full user query
+- Conflating the two (appending full query to sub-query) lets topic semantics
+  override article identity in the embedding space — wrong chunks returned
+
+**Smoke test results:**
+| Query | Type | Citations | Hallucinated | Confidence |
+|---|---|---|---|---|
+| "Compare Art. 28 and Art. 29 DSGVO on processor obligations" | multi_article | art_28 | 0 | 0.594 |
+| "What do Art. 5, Art. 13, and Art. 14 DSGVO say about transparency?" | multi_article | art_5, art_13, art_14 | 0 | 0.806 |
+| "What does Art. 5 DSGVO say about data minimisation?" | simple_rag | art_5 | 0 | 0.411 |
+
+Three concurrent threads complete in ~3 seconds vs ~9 seconds sequential.
+Confidence on three-article query: 0.528 → **0.806** after sub-query format fix.
+
+**Key decisions:**
+- See [ADR-008](docs/adr/008-parallel-multi-article-retrieval.md)
+- `ThreadPoolExecutor` over `asyncio` — `retrieve()` is sync/blocking; async adds
+  complexity with no benefit until EKS async clients (deferred to ADR-007)
+- See [L-013](docs/lessons-learned.md), [L-014](docs/lessons-learned.md)
 
 ---
 
@@ -318,9 +347,10 @@ See [`docs/adr/`](docs/adr/).
 | 005 | Evaluation methodology | ✅ Accepted |
 | 006 | LangGraph agent orchestration | ✅ Accepted |
 | 007 | Qdrant deployment on EKS | 🔄 Day 18 |
+| 008 | Parallel multi-article retrieval | ✅ Accepted |
 
 ### Lessons Learned
-Twelve debugging postmortems documented so far. See [`docs/lessons-learned.md`](docs/lessons-learned.md).
+Fourteen debugging postmortems documented so far. See [`docs/lessons-learned.md`](docs/lessons-learned.md).
 
 | # | Issue | Takeaway |
 |---|---|---|
@@ -333,9 +363,11 @@ Twelve debugging postmortems documented so far. See [`docs/lessons-learned.md`](
 | L-007 | Reranker required text_for_embedding not text_raw | Multi-stage pipelines need consistent text representations |
 | L-008 | mistralai v2.x broke `from mistralai import Mistral` | Pin exact major.minor for fast-moving AI SDKs |
 | L-009 | `[tool.uv.env]` not supported in uv 0.11.7 | Use `.env` file for PYTHONPATH; always use `uv run python` not bare `python` |
-| L-010 | `RetrievalResult` fields differ from Qdrant `ScoredPoint` — assumed `.id` and `.payload` | Always grep the actual return type before wrapping existing functions |
+| L-010 | `RetrievalResult` fields differ from Qdrant `ScoredPoint` | Always grep the actual return type before wrapping existing functions |
 | L-011 | Parent `chunk_id` is top-level in `chunks_parents.jsonl`, not nested under `metadata` | Run `head -1` on jsonl files and print key structure before writing lookup logic |
 | L-012 | `uv run pip` is not venv-aware — reports against system pip, not project venv | Always use `importlib.metadata.version()` for package introspection |
+| L-013 | Model warmup must precede ThreadPoolExecutor | Warm all `@lru_cache` models at module import time before spawning threads |
+| L-014 | Sub-query scope determines retrieval precision | Article-scoped retrieval + topic-scoped reranking — never conflate the two |
 
 ---
 
