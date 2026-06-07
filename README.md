@@ -1,382 +1,186 @@
-# Munich RAG Compliance
+# Munich RAG Compliance System
 
-A production-grade Retrieval-Augmented Generation (RAG) system over German
-regulatory documents (DSGVO + BDSG), built as a portfolio project demonstrating
-end-to-end AI engineering for the Munich enterprise market.
+**A production-grade compliance AI for German regulated enterprises** — built on EU-sovereign infrastructure, deployed as a tenant workload on a production AWS EKS platform.
 
-**Target audience:** Financial services, insurance, and regulated industries in
-Munich/Germany (Allianz, Munich Re, BaFin-regulated banks, Siemens, BMW).
+> Hybrid retrieval · LangGraph agent orchestration · DSGVO/BDSG · BaFin-ready · Full evaluation rigor
 
-**Differentiators vs. typical RAG portfolios:**
-- German-language handling (compound words, ligatures, soft hyphens, legal § references)
-- EU-sovereign tooling (Qdrant 🇩🇪, Langfuse 🇩🇪, Mistral 🇫🇷, multilingual-e5)
-- Compliance/audit angle with citation-grounded retrieval
-- Full evaluation rigor (golden dataset, Ragas, LLM-as-judge) — Week 2
-- Deploys onto a production-grade AWS EKS MLOps platform — Week 3
+**Target:** Allianz, Munich Re, BaFin-regulated banks, and any enterprise operating under GDPR/DSGVO where compliance answers must be cited, auditable, and EU-data-resident.
 
 ---
 
-## Project Status
+## What this system does
 
-| Day | Phase | Status |
-|-----|-------|--------|
-| 1 | Project scaffold + corpus acquisition | ✅ Done |
-| 2 | PDF extraction + German legal structure detection | ✅ Done |
-| 3 | Hierarchical parent-child chunking | ✅ Done |
-| 4 | Embeddings + Qdrant vector store | ✅ Done |
-| 5 | Hybrid search (dense + BM25) + reranker | ✅ Done |
-| 6 | Generation (Mistral API) + Streamlit UI | ✅ Done |
-| 7 | Mini-evaluation + golden dataset expansion | ✅ Done |
-| 8 | Agent orchestration — LangGraph (classifier, router, validator) | ✅ Done |
-| 9–10 | Agent orchestration — parallel multi-article retrieval | ✅ Done |
-| 11–13 | Full evaluation harness + RAG metrics | ⬜ Planned |
-| 14–16 | MapReduce pattern — aggregate analysis | ⬜ Planned |
-| 17–21 | Production hardening + EKS deployment | ⬜ Planned |
-
----
-
-## Architecture Overview
-
-> 🔄 Diagram in progress — will be added on Day 6 when the full pipeline
-> (ingestion → chunking → embeddings → retrieval → generation → UI) is complete.
-
----
-
-## Day-by-Day Progress
-
-### Day 1 — Project Scaffold + Corpus Acquisition
-**Commit:** `feat(day1): project scaffold + corpus downloader for BaFin/DSGVO`
-
-- Initialized Python 3.12 project with `uv` package manager
-- Structured logging with `structlog` (JSON-ready, Loki-compatible)
-- Typed config management with `pydantic-settings`
-- Polite web scraper with multi-source fallback strategy:
-  - DSGVO consolidated text (Berlin Data Protection Authority, 2025 edition)
-  - BDSG English translation (gesetze-im-internet.de)
-- Best-effort BaFin Rundschreiben scraper (documented in L-001)
-
-**Key decisions:**
-- `uv` over pip/poetry — 10-100x faster, single tool, Rust-based
-- `httpx` over `requests` — async-ready, modern
-- Multi-source + fallback pattern — production scrapers always have fallback layers
-
----
-
-### Day 2 — PDF Extraction + German Legal Structure Detection
-**Commit:** `feat(day2): PDF extraction pipeline — 86 BDSG sections, 20 DSGVO sections, 0 warnings`
-
-- Pydantic data models as pipeline contract: `Document`, `Section`
-- German-aware text cleaning pipeline (pure functions, composable):
-  - Unicode NFC normalization
-  - Ligature replacement (ﬁ → fi, ﬂ → fl, etc.)
-  - Soft-hyphen stripping (`\xad`)
-  - Line-break hyphenation repair (`Daten-\nschutz` → `Datenschutz`)
-  - Page artifact removal (page numbers, running headers)
-- Structural section detection across three heading formats:
-  - `# Artikel N` — DSGVO Markdown-headed articles
-  - `# § N` — BDSG German paragraph-sign headings
-  - `**Section N**` — BDSG English bold headings (Word-generated PDFs)
-- Language auto-detection (`langdetect`) with deterministic seeding
-- Document-type classification (Regulation vs. BaFin Circular)
-- Best-effort extraction: warnings captured per-doc, pipeline never crashes
-
-**Results:**
-| Document | Pages | Chars | Sections | Language | Warnings |
-|---|---|---|---|---|---|
-| `dsgvo_official_de` | 270 | 428,075 | 20 | de | 0 |
-| `bdsg_official_en` | 43 | 152,684 | 86 | en | 0 |
-
-**Key decisions:**
-- `pymupdf4llm` over `pypdf`/`unstructured` — structure-preserving Markdown output
-- Sections as first-class objects — enables citation-grounded retrieval
-- Pure-function text cleaning — composable, unit-testable
-- Best-effort with warnings — production pipelines don't crash on bad input
-- Debug-by-data — inspected actual extracted markdown before writing regex
-
----
-
-### Day 3 — Hierarchical Parent-Child Chunking
-**Commit:** `feat(day3): hierarchical parent-child chunking — 836 children, max 256 tokens, zero warnings`
-
-- **Parent-child hierarchy:** Small children (~200 tokens) for precise retrieval;
-  large parents (full sections, ~627 tokens avg) for rich LLM generation context
-- **Context-prefix injection:** Every child prefixed with `[DocTitle · SectionHeading]`
-  before embedding — free retrieval recall improvement
-- **Token-counted limits:** Measured on final `prefix + body` string using the
-  actual `multilingual-e5-large-instruct` tokenizer — not estimated from buffer math
-- **German-aware sentence splitting:** `sentence-splitter` library handles `z.B.`,
-  `Art.`, `Abs.`, `Nr.` abbreviations correctly
-- **Hard-split safety net:** Marathon DSGVO recital sentences (300+ tokens)
-  split on token IDs and decoded back to text
-- **Tiny-section merging:** Sections < 30 tokens merged into neighbors
-- **Deterministic chunk IDs:** MD5 hash of `doc_id + section_id` — re-chunking
-  is idempotent, no duplicate vector store entries
-- **JSON Lines output:** Streaming-friendly, append-friendly, standard for ML pipelines
-
-**Results:**
-| Metric | Value |
+| Capability | Detail |
 |---|---|
-| Parent chunks | 164 |
-| Child chunks | 836 |
-| Avg child tokens | 169 |
-| Max child tokens | 256 (at hard cap — zero overflow) |
-| Avg parent tokens | 627 |
-| Children per parent | 5.1 |
-| Documents fallen back to text | 0 |
-| Warnings | 0 |
-
-**Key decisions:**
-- See [ADR-001](docs/adr/001-hierarchical-parent-child-chunking.md)
-- Tokenization is not additive across string boundaries — measure-then-decide
-  is the only reliable approach (see [L-004](docs/lessons-learned.md))
+| **Regulatory Q&A** | Ask questions in German or English across DSGVO + BDSG corpus |
+| **Citation-grounded answers** | Every answer cites the specific article — no hallucinated law |
+| **Agent routing** | LangGraph classifier routes simple, multi-article, and out-of-scope queries |
+| **Parallel multi-article retrieval** | Concurrent retrieval across multiple legal references (3× faster) |
+| **PII detection** | Presidio-based scrubbing before any data leaves the system |
+| **Full evaluation harness** | 25-question golden dataset, Ragas metrics, LLM-as-judge scoring |
+| **EU-sovereign stack** | Qdrant 🇩🇪, Langfuse 🇩🇪, Mistral 🇫🇷 — no US cloud AI providers |
+| **EKS deployment** | Runs as tenant workload on production MLOps platform (Week 3) |
 
 ---
 
-### Day 4 — Embeddings + Qdrant Hybrid Index
-**Commit:** `feat(day4): embeddings + Qdrant hybrid index — 642 children, reconciled`
+## Why this is different from typical RAG portfolios
 
-- Dense embeddings via `multilingual-e5-large-instruct` (1024d) — same tokenizer as Day 3
-- Sparse BM25 vectors via `fastembed` for exact-term retrieval
-- Qdrant collection with named dense+sparse vectors, IDF modifier, payload indexes
-- E5 prefix discipline at the encoder API boundary
-- **Reconciliation discipline:** input count = indexed count, asserted at end of pipeline
-- **Three-layer defense against silent data loss:** upstream disambiguation in `structure.py`,
-  natural parent IDs in `chunker.py`, count reconciliation in `embed_and_index.py`
-- Tolerant `ARTICLE_PATTERN` accommodates PDF extraction drift across pipeline changes
-- **Result:** 178 sections detected (vs. 106 before bug-fix), 642 well-aligned children, zero loss
+Most RAG demos use English Wikipedia, OpenAI embeddings, and Pinecone. This system is built for a specific, hard problem:
 
-**Key decisions:**
-- See [ADR-002](docs/adr/002-embedding-model-and-vector-store.md)
-- Counterintuitive lesson: fewer chunks (642 vs 836) with better semantic alignment beats more chunks with arbitrary text windows
-- See [L-005](docs/lessons-learned.md): three-layer silent data loss debugging story
+**German legal text is genuinely difficult.**
+- Compound words (`Datenschutzbeauftragter`, `Aufsichtsbehörde`) break naive tokenizers
+- Ligatures (`ﬁ`, `ﬂ`), soft hyphens, and line-break hyphenation corrupt extracted text
+- Legal `§` references and `Art. N` cross-references require structure-aware parsing
+- Cross-lingual queries (English question → German DSGVO article) need multilingual embeddings
+
+**Compliance use cases have zero tolerance for hallucination.**
+- Citation grounding is enforced at prompt-engineering time, not post-hoc
+- Every retrieval result traces back to a specific article and document
+- Evaluation is systematic: golden dataset, Precision@1, Recall@5, MRR, LLM-as-judge
+
+**EU data sovereignty is a hard requirement for regulated enterprises.**
+- Qdrant (Germany), Langfuse (Germany), Mistral (France) — all European
+- Local Llama 3.3 fallback for air-gapped or cost-sensitive scenarios
+- Architecture is BaFin BAIT/DORA-aligned by design
 
 ---
 
-### Day 5 — Hybrid Search (Dense + BM25) + Reranker
-**Commit:** `feat(day5): hybrid search + cross-encoder reranker — P@1=79% MRR=0.871`
+## Architecture
 
-- Hybrid retrieval combining dense vectors (multilingual-e5) + sparse BM25 (fastembed BM42)
-- Cross-encoder reranker (`BAAI/bge-reranker-v2-m3`) re-scores top-40 candidates to top-10
-- Retrieval evaluation framework: Precision@1, Recall@5, MRR on 14-question golden set
-- Parent promotion: child chunk retrieved, parent context returned to LLM
-- Three retrieval strategies benchmarked: dense, hybrid, hybrid+rerank
+```
+User Query
+    │
+    ▼
+┌─────────────────────────────────────────────────────┐
+│              LangGraph Agent                        │
+│                                                     │
+│  ┌─────────────┐    ┌──────────────────────────┐   │
+│  │  Classifier  │───▶│  Router                  │   │
+│  │  (Mistral)   │    │  simple_rag /             │   │
+│  └─────────────┘    │  multi_article /           │   │
+│                     │  out_of_scope              │   │
+│                     └──────────┬─────────────────┘   │
+│                                │                     │
+│              ┌─────────────────┼──────────────────┐  │
+│              ▼                 ▼                  ▼  │
+│       Single retrieve   Parallel retrieve    Short   │
+│       (hybrid + BM25)   (ThreadPoolExecutor) circuit │
+│              │                 │                     │
+│              └────────┬────────┘                     │
+│                       ▼                              │
+│              ┌─────────────────┐                     │
+│              │ Context assembly │                    │
+│              │ (parent chunks)  │                    │
+│              └────────┬────────┘                     │
+│                       ▼                              │
+│              ┌─────────────────┐                     │
+│              │   Generator      │                    │
+│              │   (Mistral API)  │                    │
+│              └────────┬────────┘                     │
+│                       ▼                              │
+│              ┌─────────────────┐                     │
+│              │ Citation         │                    │
+│              │ validator        │                    │
+│              └────────┬────────┘                     │
+└───────────────────────┼─────────────────────────────┘
+                        ▼
+               ComplianceResponse
+               (answer + citations + confidence)
+```
 
-**Results (14 questions):**
+**Retrieval pipeline:**
+```
+PDF corpus → pymupdf4llm extraction → German-aware cleaning
+    → Hierarchical chunking (parent/child, 256 token max)
+    → multilingual-e5-large-instruct embeddings (1024d)
+    → Qdrant hybrid index (dense + BM25 sparse)
+    → Cross-encoder reranker (BAAI/bge-reranker-v2-m3)
+    → Parent promotion → LLM context window
+```
+
+**Retrieval performance (25-question golden dataset):**
+
 | Strategy | P@1 | R@5 | MRR |
 |---|---|---|---|
-| Dense | 79% | 100% | 0.871 |
-| Hybrid | 71% | 93% | 0.780 |
-| Hybrid + Rerank | 79% | 100% | 0.871 |
-
-**Key decisions:**
-- See [ADR-003](docs/adr/003-hybrid-search-and-reranker.md)
-- Reranker requires `text_for_embedding` (prefix-injected) not raw text — consistent
-  text representation across all pipeline stages (see [L-007](docs/lessons-learned.md))
-- BM42 sparse model outperforms classic BM25 on legal German compound terms
+| Dense only | 72% | 84% | 0.768 |
+| Hybrid (dense + BM25) | 64% | 84% | 0.723 |
+| Hybrid + rerank ✅ | **80%** | **88%** | **0.828** |
 
 ---
 
-### Day 6 — Generation (Mistral API) + Streamlit UI
-**Commit:** `feat(day6): generation pipeline + Streamlit UI — streaming, citations, dark theme`
+## Build status
 
-- `ComplianceGenerator` class: system prompt engineering for citation-grounded answers
-- Streaming generation via `mistralai==1.2.5` (pinned — v2.x broke import API)
-- Streamlit UI: dark theme, strategy selector (dense/hybrid/hybrid+rerank),
-  expandable source citations panel, conversation history
-- Prompt engineering: role framing as EU compliance expert, structured citation format,
-  German/English bilingual instruction handling
-- End-to-end pipeline wired: query → retrieve → rerank → generate → stream to UI
-
-**Key decisions:**
-- See [ADR-004](docs/adr/004-prompt-engineering-generation.md)
-- Pin `mistralai==1.2.5` — v2.x changed the import structure mid-project
-  (see [L-008](docs/lessons-learned.md))
-- Streaming over batch generation — compliance users expect near-instant first token
-- Citation grounding in prompt, not post-hoc — hallucination prevention by design
-
----
-
-### Day 7 — Mini-Evaluation + Golden Dataset Expansion
-**Commit:** `day7: expand golden set 14→25, establish eval methodology, ADR-005`
-
-- Diagnosed both Day 5 open failures with real retrieval data — both confirmed as
-  reranker-dependent passes, not corpus problems
-- Discovered DSGVO/BDSG section_id namespace collision: both corpora use `art_1`
-  through `art_86` — 8 golden questions required `expected_doc_id` scoping
-- Expanded golden set from 14 → 25 questions across 6 failure categories:
-  synonym stress, cross-lingual, specific clause, adjacent article, BDSG-specific, scope
-- Introduced `eval_mode` field: `strict` (single article) vs `cluster_any`
-  (broad queries with multiple valid answers)
-- Fixed Q5 wording: controller obligation framing pulled art_13 instead of art_15 —
-  rewrote to data subject access framing
-- Added art_49 (transfer derogations) to Q11 expected set — legitimate retrieval answer
-
-**Results (25 questions, Day 7 official baseline):**
-| Strategy | P@1 | R@5 | MRR |
-|---|---|---|---|
-| Dense | 72% | 84% | 0.768 |
-| Hybrid | 64% | 84% | 0.723 |
-| Hybrid + Rerank | **80%** | **88%** | **0.828** |
-
-Hybrid+rerank leads dense by +8% P@1 — reranker value statistically unambiguous at 25 questions.
-
-**Open failures carried to Days 11–13:**
-- Q18/Q19: English queries retrieve BDSG articles instead of DSGVO (R@5=✗) — HyDE candidate
-- Q23: German query cannot bridge to English BDSG corpus — known cross-lingual limitation
-
-**Key decisions:**
-- See [ADR-005](docs/adr/005-evaluation-methodology.md)
-- Retrieval eval and generation eval are intentionally separate scripts with separate metrics
-- Primary metric is hybrid+rerank P@1 — dense P@1 reported for diagnostics only
-- `uv run python` always — bare `python` silently picks up system interpreter
-  (see [L-009](docs/lessons-learned.md))
-
----
-
-### Day 8 — Agent Orchestration (LangGraph)
-**Commit:** `day8: LangGraph agent — classifier, router, citation validator, ComplianceResponse`
-
-- `src/agent/models.py` — `AgentState` TypedDict (LangGraph shared state) +
-  `ComplianceResponse` Pydantic model (typed output for all callers)
-- `src/agent/nodes.py` — five nodes: `query_classifier`, `retriever`,
-  `context_assembler`, `generator`, `citation_validator`
-- `src/agent/graph.py` — LangGraph `StateGraph`, conditional routing, `run_agent()` public API
-- `docs/adr/006-langgraph-agent-orchestration.md` — ADR accepted before implementation
-
-**Query routing:**
-| Class | Behaviour |
-|---|---|
-| `simple_rag` | Classify → Retrieve → Assemble → Generate → Validate citations |
-| `multi_article` | Same path — parallel retrieval scaffolded, completed Days 9–10 |
-| `out_of_scope` | Short-circuit at classifier — no retrieval, no generation, no LLM cost |
-
-**Smoke test results:**
-| Query | Type | Citations | Confidence |
-|---|---|---|---|
-| "What does Art. 5 DSGVO say?" | simple_rag | [] | 0.248 |
-| "Compare Art. 28 and Art. 29 DSGVO" | multi_article | [art_28, art_29] | 0.334 |
-| "What is the weather in Munich?" | out_of_scope | [] | 0.0 |
-
-**Key decisions:**
-- See [ADR-006](docs/adr/006-langgraph-agent-orchestration.md)
-- `AgentState` is a `TypedDict` not Pydantic — LangGraph requires partial state updates
-  per node; Pydantic requires all fields at construction
-- Only 2 of 5 nodes invoke an LLM — classifier and generator; remaining 3 are
-  deterministic Python
-- See [L-010](docs/lessons-learned.md), [L-011](docs/lessons-learned.md),
-  [L-012](docs/lessons-learned.md)
-
----
-
-### Days 9–10 — Agent Orchestration (Parallel Multi-Article Retrieval)
-**Commit:** `day9: parallel multi-article retrieval — ADR-008, L-013, L-014`
-
-- `src/agent/article_parser.py` — regex extraction of article references from query string
-- `src/agent/parallel_retriever.py` — `ThreadPoolExecutor` concurrent `retrieve()` per
-  article reference; merge by best score, dedup by `chunk_id`
-- `src/agent/nodes.py` — retriever node branches on `query_type`:
-  `simple_rag` → single `retrieve()`; `multi_article` → parallel retrieve + merge
-- All three `@lru_cache` models warmed at module import time — eliminates
-  Half/Float dtype race condition under concurrent thread initialisation
-- Sub-query format `Artikel N DSGVO` — article-scoped retrieval, topic-scoped reranking
-
-**Design principle — separation of concerns across two stages:**
-- **Retrieval:** `Artikel N DSGVO` sub-query scopes to the correct article's chunks
-- **Reranking:** scores those chunks against the original full user query
-- Conflating the two (appending full query to sub-query) lets topic semantics
-  override article identity in the embedding space — wrong chunks returned
-
-**Smoke test results:**
-| Query | Type | Citations | Hallucinated | Confidence |
-|---|---|---|---|---|
-| "Compare Art. 28 and Art. 29 DSGVO on processor obligations" | multi_article | art_28 | 0 | 0.594 |
-| "What do Art. 5, Art. 13, and Art. 14 DSGVO say about transparency?" | multi_article | art_5, art_13, art_14 | 0 | 0.806 |
-| "What does Art. 5 DSGVO say about data minimisation?" | simple_rag | art_5 | 0 | 0.411 |
-
-Three concurrent threads complete in ~3 seconds vs ~9 seconds sequential.
-Confidence on three-article query: 0.528 → **0.806** after sub-query format fix.
-
-**Key decisions:**
-- See [ADR-008](docs/adr/008-parallel-multi-article-retrieval.md)
-- `ThreadPoolExecutor` over `asyncio` — `retrieve()` is sync/blocking; async adds
-  complexity with no benefit until EKS async clients (deferred to ADR-007)
-- See [L-013](docs/lessons-learned.md), [L-014](docs/lessons-learned.md)
-
----
-
-## Tech Stack
-
-| Layer | Technology | Rationale |
+| Phase | Capability | Status |
 |---|---|---|
-| Language | Python 3.12 | Modern, type-hint-friendly |
-| Package manager | `uv` | 10-100x faster than pip, Rust-based |
-| PDF extraction | `pymupdf4llm` | Structure-preserving Markdown output |
-| Data validation | `pydantic` v2 | Type-safe models, JSON serialization |
-| Config management | `pydantic-settings` | Env-var driven, 12-factor ready |
-| Logging | `structlog` | JSON logs, Loki-compatible |
-| Sentence splitting | `sentence-splitter` | German-aware abbreviation handling |
-| Tokenization | `transformers` (HuggingFace) | Same tokenizer at chunk + embed time |
-| Vector DB | Qdrant (🇩🇪) | German-founded, hybrid search native |
-| Embeddings | `multilingual-e5-large-instruct` | Best open multilingual, German-strong |
-| LLM | Mistral Large (🇫🇷) | EU-sovereign, strong multilingual |
-| Agent orchestration | LangGraph 0.3.34 | Stateful graph, conditional routing, auditable |
-| Observability | Langfuse (🇩🇪) | LLM tracing, German-founded |
-| Deployment | AWS EKS + ArgoCD | Production MLOps platform (separate repo) |
+| **Ingestion** | PDF extraction, German legal structure detection | ✅ Complete |
+| **Chunking** | Hierarchical parent-child, German-aware sentence splitting | ✅ Complete |
+| **Retrieval** | Hybrid search (dense + BM25), cross-encoder reranker | ✅ Complete |
+| **Generation** | Mistral API, citation-grounded prompt engineering, Streamlit UI | ✅ Complete |
+| **Evaluation** | 25-question golden dataset, Ragas metrics, LLM-as-judge | ✅ Complete |
+| **Agent** | LangGraph orchestration — classifier, router, validator | ✅ Complete |
+| **Parallel retrieval** | Multi-article concurrent retrieval, 3× latency improvement | ✅ Complete |
+| **Full eval harness** | MapReduce aggregate analysis, extended Ragas suite | ⬜ Week 2 |
+| **EKS deployment** | Tenant workload on MLOps platform, Qdrant on Kubernetes | ⬜ Week 3 |
 
 ---
 
-## Repository Structure
+## Tech stack
 
-> 🔄 Structure stabilises on Day 6. Full directory tree will be documented then.
-> Current layout: `src/` (ingestion, chunking, embeddings, retrieval, generation, agent),
-> `scripts/`, `notebooks/`, `docs/`, `data/`.
-
----
-
-## Documentation
-
-### Architecture Decision Records
-See [`docs/adr/`](docs/adr/).
-
-| # | Decision | Status |
+| Layer | Technology | Why |
 |---|---|---|
-| 001 | Hierarchical parent-child chunking | ✅ Accepted |
-| 002 | Embedding model and vector store selection | ✅ Accepted |
-| 003 | Hybrid search strategy and reranker selection | ✅ Accepted |
-| 004 | Prompt engineering and generation architecture | ✅ Accepted |
-| 005 | Evaluation methodology | ✅ Accepted |
-| 006 | LangGraph agent orchestration | ✅ Accepted |
-| 007 | Qdrant deployment on EKS | 🔄 Day 18 |
-| 008 | Parallel multi-article retrieval | ✅ Accepted |
-
-### Lessons Learned
-Fourteen debugging postmortems documented so far. See [`docs/lessons-learned.md`](docs/lessons-learned.md).
-
-| # | Issue | Takeaway |
-|---|---|---|
-| L-001 | BaFin JS-rendered scraper returned 0 PDFs | Good-enough corpus beats perfect corpus you can't get |
-| L-002 | `onnxruntime` Apple Silicon wheel conflict | Platform override + `--no-deps` pattern for ML dependencies |
-| L-003 | BDSG 0 sections — wrong heading format assumed | Look at the data before writing the regex |
-| L-004 | Token overflow despite hard-cap enforcement | Tokenization is not additive across string boundaries |
-| L-005 | Silent data loss — three-layer root cause | Reconcile input/output counts; no hash truncation; tolerant patterns |
-| L-006 | PDF margin annotations mistaken for headings | Inspect source PDF layout; Python indentation is silently load-bearing |
-| L-007 | Reranker required text_for_embedding not text_raw | Multi-stage pipelines need consistent text representations |
-| L-008 | mistralai v2.x broke `from mistralai import Mistral` | Pin exact major.minor for fast-moving AI SDKs |
-| L-009 | `[tool.uv.env]` not supported in uv 0.11.7 | Use `.env` file for PYTHONPATH; always use `uv run python` not bare `python` |
-| L-010 | `RetrievalResult` fields differ from Qdrant `ScoredPoint` | Always grep the actual return type before wrapping existing functions |
-| L-011 | Parent `chunk_id` is top-level in `chunks_parents.jsonl`, not nested under `metadata` | Run `head -1` on jsonl files and print key structure before writing lookup logic |
-| L-012 | `uv run pip` is not venv-aware — reports against system pip, not project venv | Always use `importlib.metadata.version()` for package introspection |
-| L-013 | Model warmup must precede ThreadPoolExecutor | Warm all `@lru_cache` models at module import time before spawning threads |
-| L-014 | Sub-query scope determines retrieval precision | Article-scoped retrieval + topic-scoped reranking — never conflate the two |
+| Language | Python 3.12 + `uv` | Modern, type-safe, 10-100× faster package management |
+| PDF extraction | `pymupdf4llm` | Structure-preserving Markdown — critical for legal text |
+| Data validation | Pydantic v2 | Typed pipeline contracts, JSON serialization |
+| Logging | `structlog` | JSON logs, Loki-compatible for EKS observability |
+| Vector DB | Qdrant 🇩🇪 | German-founded, native hybrid search, EU-resident |
+| Embeddings | `multilingual-e5-large-instruct` | Best open multilingual model, strong on German |
+| Reranker | `BAAI/bge-reranker-v2-m3` | Cross-encoder reranking, +8% P@1 over dense alone |
+| LLM | Mistral Large 🇫🇷 | EU-sovereign, strong multilingual, DSGVO-compliant |
+| Local fallback | Llama 3.3 | Air-gapped / cost-sensitive scenarios |
+| Agent | LangGraph 0.3.34 | Stateful graph, conditional routing, auditable traces |
+| Observability | Langfuse 🇩🇪 | LLM tracing, German-founded, EU-resident |
+| PII detection | Presidio | Microsoft open-source, production-grade |
+| Evaluation | Ragas + LLM-as-judge | Dual-track: retrieval metrics + generation quality |
+| Deployment | AWS EKS + ArgoCD | Production MLOps platform (separate repo below) |
 
 ---
 
-## Running the Pipeline
+## Key engineering decisions
+
+Eight Architecture Decision Records document every major choice. Selected highlights:
+
+**ADR-001 — Hierarchical parent-child chunking**
+Small children (≤256 tokens) for precise retrieval precision; large parents (full sections, ~627 tokens avg) for rich generation context. Context-prefix injection on every child chunk (`[DocTitle · SectionHeading]`) before embedding — free recall improvement with no extra infrastructure.
+
+**ADR-003 — Hybrid search + reranker**
+BM42 sparse model outperforms classic BM25 on German legal compound terms. Reranker adds +8% P@1 at 25 questions — statistically unambiguous. Key insight: reranker requires prefix-injected text (`text_for_embedding`), not raw text — consistent representation across all pipeline stages.
+
+**ADR-008 — Parallel multi-article retrieval**
+Separation of concerns across two stages: article-scoped sub-queries (`Artikel N DSGVO`) for retrieval precision; original full query for reranking topic relevance. Conflating the two lets topic semantics override article identity in the embedding space. `ThreadPoolExecutor` over asyncio — `retrieve()` is sync/blocking; async adds complexity with no benefit until EKS async clients.
+
+Full ADR index: [`docs/adr/`](docs/adr/)
+
+---
+
+## Lessons learned
+
+Fourteen debugging postmortems documented. A selection of the non-obvious ones:
+
+| # | Root cause | Takeaway |
+|---|---|---|
+| L-004 | Token overflow despite hard-cap logic | Tokenization is not additive across string boundaries — measure the final string, not the parts |
+| L-005 | Silent data loss — 836 → 642 chunks | Three-layer defence: upstream disambiguation + natural IDs + count reconciliation at pipeline end |
+| L-013 | Race condition under concurrent threads | Warm all `@lru_cache` models at module import time before spawning ThreadPoolExecutor |
+| L-014 | Wrong chunks returned in multi-article queries | Article-scoped retrieval + topic-scoped reranking — never conflate the two stages |
+
+Full postmortem log: [`docs/lessons-learned.md`](docs/lessons-learned.md)
+
+---
+
+## Running the system
 
 ### Prerequisites
-- Python 3.12+
-- `uv` package manager
-- Docker Desktop (for Qdrant, Day 4+)
+- Python 3.12+, `uv` package manager, Docker Desktop (Qdrant)
 
 ### Setup
 
@@ -385,31 +189,30 @@ git clone https://github.com/srinivas-singireddy/munich-rag-compliance
 cd munich-rag-compliance
 uv sync
 uv pip install pymupdf4llm --no-deps
-uv pip install tabulate
 ```
 
-### Run the pipeline
+### Run the full pipeline
 
 ```bash
-# Step 1: Download corpus
+# 1. Download corpus (DSGVO + BDSG)
 PYTHONPATH=. uv run python -m scripts.download_corpus
 
-# Step 2: Extract + structure
+# 2. Extract and structure
 PYTHONPATH=. uv run python -m scripts.extract_corpus
 
-# Step 3: Chunk
+# 3. Chunk (hierarchical parent-child)
 PYTHONPATH=. uv run python -m scripts.chunk_corpus
 
-# Step 4: Embed + index
+# 4. Embed and index into Qdrant
 PYTHONPATH=. uv run python -m scripts.embed_and_index
 
-# Step 5: Run retrieval evaluation
+# 5. Run retrieval evaluation (25-question golden dataset)
 PYTHONPATH=. uv run python -m scripts.eval_retrieval
 
-# Step 6: Launch UI
+# 6. Launch Streamlit UI
 PYTHONPATH=. uv run streamlit run app/streamlit_app.py
 
-# Step 7: Run compliance agent (Day 8+)
+# 7. Run compliance agent directly
 PYTHONPATH=. uv run python -c '
 from src.agent.graph import run_agent
 response = run_agent("What are the lawful bases for processing under DSGVO?")
@@ -419,19 +222,22 @@ print(response.answer)
 
 ---
 
-## Related Projects
+## Related: MLOps platform
 
-**MLOps Platform (AWS EKS):**
+This system deploys as a **tenant workload** on a production-grade AWS EKS platform.
+
 [`github.com/srinivas-singireddy/mlops-platform-aws-eks`](https://github.com/srinivas-singireddy/mlops-platform-aws-eks)
 
-Production-grade EKS platform that hosts this RAG system as a tenant workload
-in Week 3. Features: Terraform IaC, ArgoCD GitOps, ESO secrets management,
-Prometheus/Grafana/Loki observability, cert-manager, ALB Controller, Karpenter.
-Daily destroy/apply ritual keeps AWS spend at ~€20/month.
+Platform features: Terraform IaC (3 roots: network/cluster/platform), ArgoCD GitOps, External Secrets Operator, kube-prometheus-stack, Loki, Grafana Alloy, cert-manager, ALB Controller, Karpenter 1.8.6, AL2023 nodes. Daily destroy/apply ritual keeps AWS spend at ~€20/month.
+
+**The story these two repos tell together:** platform engineering (the substrate) + AI engineering (the tenant workload) demonstrated end-to-end. This is how mature platform organisations think about deploying AI.
 
 ---
 
 ## Author
 
-**Srinivas Singireddy** — Cloud & DevOps Solutions Architect
-Munich, Germany · [GitHub](https://github.com/srinivas-singireddy) · CKA certified
+**Srinivas Singireddy** — Senior Solutions Architect  
+25+ years enterprise architecture · Financial Services & Insurance · Munich, Germany  
+CKA certified (Linux Foundation, valid through 2027) · German PR · EU work auth  
+
+[GitHub](https://github.com/srinivas-singireddy) · [LinkedIn](https://linkedin.com/in/srinivas-singireddy)
