@@ -47,46 +47,7 @@ Most RAG demos use English Wikipedia, OpenAI embeddings, and Pinecone. This syst
 
 ## Architecture
 
-```
-User Query
-    │
-    ▼
-┌─────────────────────────────────────────────────────┐
-│              LangGraph Agent                        │
-│                                                     │
-│  ┌─────────────┐    ┌──────────────────────────┐   │
-│  │  Classifier  │───▶│  Router                  │   │
-│  │  (Mistral)   │    │  simple_rag /             │   │
-│  └─────────────┘    │  multi_article /           │   │
-│                     │  out_of_scope              │   │
-│                     └──────────┬─────────────────┘   │
-│                                │                     │
-│              ┌─────────────────┼──────────────────┐  │
-│              ▼                 ▼                  ▼  │
-│       Single retrieve   Parallel retrieve    Short   │
-│       (hybrid + BM25)   (ThreadPoolExecutor) circuit │
-│              │                 │                     │
-│              └────────┬────────┘                     │
-│                       ▼                              │
-│              ┌─────────────────┐                     │
-│              │ Context assembly │                    │
-│              │ (parent chunks)  │                    │
-│              └────────┬────────┘                     │
-│                       ▼                              │
-│              ┌─────────────────┐                     │
-│              │   Generator      │                    │
-│              │   (Mistral API)  │                    │
-│              └────────┬────────┘                     │
-│                       ▼                              │
-│              ┌─────────────────┐                     │
-│              │ Citation         │                    │
-│              │ validator        │                    │
-│              └────────┬────────┘                     │
-└───────────────────────┼─────────────────────────────┘
-                        ▼
-               ComplianceResponse
-               (answer + citations + confidence)
-```
+![System Architecture](docs/architecture.svg)
 
 **Retrieval pipeline:**
 ```
@@ -105,9 +66,6 @@ PDF corpus → pymupdf4llm extraction → German-aware cleaning
 | Dense only | 72% | 84% | 0.768 |
 | Hybrid (dense + BM25) | 64% | 84% | 0.723 |
 | Hybrid + rerank ✅ | **80%** | **88%** | **0.828** |
-
----
-
 ## Build status
 
 | Phase | Capability | Status |
@@ -189,8 +147,6 @@ git clone https://github.com/srinivas-singireddy/munich-rag-compliance
 cd munich-rag-compliance
 uv sync
 uv pip install pymupdf4llm --no-deps
-```
-
 ### Run the full pipeline
 
 ```bash
@@ -218,8 +174,6 @@ from src.agent.graph import run_agent
 response = run_agent("What are the lawful bases for processing under DSGVO?")
 print(response.answer)
 '
-```
-
 ---
 
 ## Related: MLOps platform
