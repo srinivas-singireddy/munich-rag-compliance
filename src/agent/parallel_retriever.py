@@ -18,6 +18,14 @@ from qdrant_client import QdrantClient
 from src.retrieval.hybrid_search import retrieve, get_reranker
 from src.embeddings.encoder import get_dense_model, get_sparse_model
 
+import time
+
+from qdrant_client.models import Filter, FieldCondition, MatchValue
+
+import threading
+
+_reranker_lock = threading.Lock()
+
 log = structlog.get_logger()
 
 # Warm up both models once at import time — before any threads start.
@@ -29,7 +37,7 @@ get_sparse_model()
 get_reranker()
 
 # Cap workers — we have at most ~5 article refs in realistic queries
-_MAX_WORKERS = 5
+_MAX_WORKERS = 8
 
 
 def _retrieve_for_article(
@@ -43,18 +51,25 @@ def _retrieve_for_article(
     Builds a focused sub-query: "Art. 28 <original query context>".
     Returns list of serialised chunk dicts (same shape as retriever node output).
     """
+    t0 = time.perf_counter()
     # Build article-scoped sub-query — prepend article number for embedding focus
     article_num = article_ref.replace("art_", "")
     sub_query = f"Artikel {article_num} DSGVO"
 
     log.info("parallel_retrieve.start", article=article_ref, sub_query=sub_query)
 
-    results = retrieve(
-        client=client,
-        query=sub_query,
-        strategy="hybrid+rerank",
-        top_k=top_k,
+    article_filter = Filter(
+        must=[FieldCondition(key="metadata.section_id", match=MatchValue(value=article_ref))]
     )
+
+    with _reranker_lock:
+        results = retrieve(
+            client=client,
+            query=sub_query,
+            strategy="hybrid+rerank",
+            top_k=top_k,
+            filter_=article_filter,
+        )
 
     serialised = [
         {
@@ -70,7 +85,13 @@ def _retrieve_for_article(
         for r in results
     ]
 
-    log.info("parallel_retrieve.done", article=article_ref, n_chunks=len(serialised))
+    elapsed = time.perf_counter() - t0
+    log.info(
+        "parallel_retrieve.thread_done",
+        article=article_ref,
+        n_chunks=len(serialised),
+        elapsed_ms=round(elapsed * 1000),
+    )
     return serialised
 
 
@@ -87,11 +108,13 @@ def parallel_retrieve(
     Returns list of chunk dicts — same shape as single retrieve() output,
     ready to be passed directly to context_assembler.
     """
+
     if not article_refs:
         log.warning("parallel_retrieve.no_refs", query=query)
         return []
 
     all_chunks: list[dict] = []
+    t0 = time.perf_counter()
 
     # ThreadPoolExecutor — correct choice here because retrieve() is I/O-bound
     # (network calls to Qdrant + HTTP to Mistral reranker).
@@ -122,5 +145,11 @@ def parallel_retrieve(
             best[cid] = chunk
 
     merged = sorted(best.values(), key=lambda c: c["score"], reverse=True)
-    log.info("parallel_retrieve.merged", total_before=len(all_chunks), after_dedup=len(merged))
+    elapsed = time.perf_counter() - t0
+    log.info(
+        "parallel_retrieve.merged",
+        total_before=len(all_chunks),
+        after_dedup=len(merged),
+        wall_ms=round(elapsed * 1000),
+    )
     return merged

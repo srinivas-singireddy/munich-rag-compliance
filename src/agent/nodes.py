@@ -149,7 +149,7 @@ def retriever(state: AgentState) -> dict:
             article_refs = parse_article_refs(query)
             logger.info("retriever.multi_article", refs=article_refs)
 
-            if article_refs:
+            if len(article_refs) >= 2:
                 # One retrieve() call per article ref, concurrent via ThreadPoolExecutor
                 # Results merged: dedup by chunk_id, best score wins, sorted descending
                 chunks = parallel_retrieve(

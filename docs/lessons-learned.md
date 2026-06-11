@@ -28,6 +28,7 @@ Format per entry:
 | L-012 | `uv run pip` is not venv-aware on this setup | Always use `importlib.metadata` for package introspection |
 | L-013 | Model warmup must precede ThreadPoolExecutor | Warm all `@lru_cache` models at module import time before spawning threads |
 | L-014 | Sub-query scope determines retrieval precision | Article-scoped retrieval + topic-scoped reranking — never conflate the two |
+| L-015 | Classifier routes natural-language topic queries as simple_rag even when answer spans multiple articles | multi_article activates on explicit article refs only; topic-spanning queries need a different detection strategy — candidate for Days 11–13 eval harness |
 
 ---
 
