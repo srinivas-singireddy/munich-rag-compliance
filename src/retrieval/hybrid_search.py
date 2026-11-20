@@ -98,7 +98,7 @@ def search_hybrid(
     top_k: int = HYBRID_CANDIDATE_K,
     filter_: qm.Filter | None = None,
 ) -> list[RetrievalResult]:
-    """Hybrid search: dense + BM25 combined via Reciprocal Rank Fusion."""
+    """Hybrid search: dense + BM42 sparse combined via Reciprocal Rank Fusion."""
     dense_vec = encode_query_dense(query)
     sparse_vec = encode_query_sparse(query)
 
@@ -120,12 +120,18 @@ def search_hybrid(
             ),
         ],
         query=qm.FusionQuery(fusion=qm.Fusion.RRF),
-        limit=top_k,
+        limit=2 * top_k,  # full fused set: each prefetch returns <= top_k
         query_filter=filter_,
         with_payload=True,
     ).points
 
-    return [_qdrant_to_result(p, "hybrid") for p in points]
+    # Qdrant RRF scores are simple fractions -> exact ties are common, and tied
+    # points come back in arbitrary order. Sort locally with a stable tie-break
+    # (chunk_id is built from names, so it survives index rebuilds), then cut.
+    # See L-018 / ADR-011.
+    results = [_qdrant_to_result(p, "hybrid") for p in points]
+    results.sort(key=lambda r: (-r.score, r.chunk_id))
+    return results[:top_k]
 
 
 def rerank(
