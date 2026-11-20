@@ -1,7 +1,7 @@
 # ADR-006: Agent Orchestration with LangGraph
 
 **Status:** Accepted  
-**Date:** 2025-06-01  
+**Date:** 2026-06-02
 **Deciders:** Srinivas Singireddy  
 **Project:** munich-rag-compliance
 

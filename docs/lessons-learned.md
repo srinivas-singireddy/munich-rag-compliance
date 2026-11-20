@@ -29,6 +29,9 @@ Format per entry:
 | L-013 | Model warmup must precede ThreadPoolExecutor | Warm all `@lru_cache` models at module import time before spawning threads |
 | L-014 | Sub-query scope determines retrieval precision | Article-scoped retrieval + topic-scoped reranking — never conflate the two |
 | L-015 | Classifier routes natural-language topic queries as simple_rag even when answer spans multiple articles | multi_article activates on explicit article refs only; topic-spanning queries need a different detection strategy — candidate for Days 11–13 eval harness |
+| L-016 | 15 of 25 golden records had no `expected_doc_id` — scoring silently accepted either law | Optional fields read with `.get()` fail open; backfill and assert completeness when a field is added mid-dataset; measure suspected inflation, don't assume it |
+| L-017 | fastembed BM42 cache in macOS `$TMPDIR` — model silently re-downloaded | Library cache defaults are dev conveniences; pin every model cache path and test offline |
+| L-018 | Qdrant RRF ties returned in arbitrary order — hybrid metrics not reproducible | Fetch the full fused set, sort locally with a stable tie-break; deterministic ≠ correct; CI gates compare thresholds, never exact lists |
 
 ---
 
@@ -517,3 +520,99 @@ Retrieval and reranking handle two separate concerns and must not be conflated:
 Injecting topic context into the retrieval sub-query lets semantic noise
 override the article identity signal. The retriever finds the wrong article;
 the reranker has no way to recover because it only sees what retrieval returned.
+
+## L-016: 15 of 25 golden records had no `expected_doc_id` — scoring silently accepted either law
+
+**Date:** 2026-11-20
+**Phase:** Day 11 — golden records had no `expected_doc_id - Backfilled
+
+**What happened**
+The Day 11 resume planned to backfill one golden record (Q11) that was missing
+`expected_doc_id`. A full-file check found 14 more (Q01–Q03, Q05, Q07–Q10, Q12,
+Q14–Q18): only 11 of 25 records were document-scoped. Document scoping was
+introduced partway through building the golden set; Q13 and Q19–Q25 carry the
+key from the start, Q04/Q06 were backfilled earlier, the rest never were.
+
+**Investigation**
+`eval_retrieval.py` reads the key with `item.get("expected_doc_id", None)`. A
+missing key becomes `None` and the document check is skipped
+(`if expected_doc: ...`), so a BDSG chunk with a matching `section_id` would
+count as a hit — DSGVO and BDSG share the `art_N` namespace. Retrieval itself is
+never document-filtered; only scoring is affected.
+
+Measured instead of assumed: hybrid+rerank scored three ways (as committed /
+Q11 fixed / all 25 scoped) gave 20/25, 22/25, MRR 0.8280 in all three, with
+zero per-question changes. The lenient branch never fired.
+
+**Resolution**
+Reviewed each of the 15 records — all target DSGVO (Q10's own note says "not
+BDSG Sec 37"). Backfilled `expected_doc_id: dsgvo_official_de` with a
+line-preserving rewrite: exactly 15 lines changed, 24 DSGVO + 1 BDSG (Q23).
+Locked figures unchanged — calibration, not manipulation (ADR-005).
+
+**Takeaway**
+An optional field read with `.get()` fails open: a missing key silently turns a
+strict check into a lenient one. When a schema field is added mid-dataset,
+backfill and assert completeness in the same change. Follow-up: the harness
+should warn or fail when `expected_doc_id` is missing.
+
+## L-017: fastembed BM42 cache in macOS `$TMPDIR` — model silently re-downloaded
+
+**Date:** 2026-11-20
+**Phase:** Day 11 — model silently re-downloaded
+
+**What happened**
+During an eval run, "Fetching 6 files … Download complete: 91.7MB" appeared:
+the BM42 sparse model was re-downloaded from the Hugging Face Hub.
+
+**Investigation**
+`fastembed_cache` was found under `$TMPDIR` (`/var/folders/…/T/`). macOS cleans
+this folder periodically (exact interval unverified), so the model disappears
+and is fetched again on next use. The run therefore needed internet access —
+contradicting the local / EU-sovereign claim — and would add a cold download to
+every CI run and container start.
+
+**Resolution**
+Not yet fixed. Planned for D3 (config externalisation): explicit cache directory
+via Settings; reproducibility runs with `HF_HUB_OFFLINE=1` so a missing model
+fails loudly. The container (D11) mounts a writable cache volume.
+
+**Takeaway**
+Library defaults for caches are dev conveniences, not deployment decisions. Pin
+every model cache path explicitly and test offline.
+
+## L-018: Qdrant RRF ties returned in arbitrary order — hybrid metrics not reproducible
+
+**Date:** 2026-11-20
+**Phase:** Day 11 — Qdrant RRF ties returned in arbitrary order
+
+**What happened**
+A determinism check showed result lists differing between identical runs.
+Q12 (hybrid+rerank): an `art_58` chunk was present in some runs and absent in
+others. Plain hybrid: the same golden set gave P@1 16/25 then 17/25 (MRR 0.7233
+vs 0.7433). The README hybrid row (0.723) was one sample from that spread.
+
+**Investigation**
+Reranker scores were identical to 7 decimals across runs — the reranker is
+deterministic. Fusion runs server-side (`FusionQuery(fusion=Fusion.RRF)`); RRF
+scores are simple fractions, so exact ties are common. Q06: `art_33` and
+`art_83` both scored exactly 0.5 and swapped across runs; a second tie at rank 3
+(0.33333334). With `limit=top_k`, the server also cut inside ties at position
+40, changing the candidate set the reranker sees.
+
+**Resolution**
+`search_hybrid` now requests the full fused set (`limit=2 * top_k`; each
+prefetch returns ≤ top_k), sorts locally by `(-score, chunk_id)`, then cuts to
+`top_k`. `chunk_id` is an MD5 of `doc_id` + `section_id` (names, not text), so
+the order survives index rebuilds. Verified: Q06 identical ×4; hybrid identical
+×3 at 16/25, 21/25, MRR 0.7267; hybrid+rerank identical ×2 at 20/25, 22/25,
+MRR 0.8280 — locked figures unchanged. See ADR-011.
+
+**Takeaway**
+Rank fusion produces exact ties by design; a server that returns ties in
+arbitrary order makes metrics non-reproducible. Deterministic is not the same as
+correct: in Q06 the tie-break now ranks `art_83` above the correct `art_33`. A CI
+gate must compare metrics against thresholds, never exact result lists.
+
+
+

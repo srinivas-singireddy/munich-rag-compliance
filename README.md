@@ -54,7 +54,7 @@ Most RAG demos use English Wikipedia, OpenAI embeddings, and Pinecone. This syst
 PDF corpus → pymupdf4llm extraction → German-aware cleaning
     → Hierarchical chunking (parent/child, 256 token max)
     → multilingual-e5-large-instruct embeddings (1024d)
-    → Qdrant hybrid index (dense + BM25 sparse)
+    → Qdrant hybrid index (dense + BM42 sparse)
     → Cross-encoder reranker (BAAI/bge-reranker-v2-m3)
     → Parent promotion → LLM context window
 ```
@@ -64,15 +64,18 @@ PDF corpus → pymupdf4llm extraction → German-aware cleaning
 | Strategy | P@1 | R@5 | MRR |
 |---|---|---|---|
 | Dense only | 72% | 84% | 0.768 |
-| Hybrid (dense + BM25) | 64% | 84% | 0.723 |
+| Hybrid (dense + BM42) | 64% | 84% | 0.727 |
 | Hybrid + rerank ✅ | **80%** | **88%** | **0.828** |
+
+*Retrieval is deterministic: RRF score ties are broken by `chunk_id` ([ADR-011](docs/adr/011-deterministic-hybrid-tie-break.md)). The hybrid row is tie-sensitive.*
+
 ## Build status
 
 | Phase | Capability | Status |
 |---|---|---|
 | **Ingestion** | PDF extraction, German legal structure detection | ✅ Complete |
 | **Chunking** | Hierarchical parent-child, German-aware sentence splitting | ✅ Complete |
-| **Retrieval** | Hybrid search (dense + BM25), cross-encoder reranker | ✅ Complete |
+| **Retrieval** | Hybrid search (dense + BM42 sparse), cross-encoder reranker | ✅ Complete |
 | **Generation** | Mistral API, citation-grounded prompt engineering, Streamlit UI | ✅ Complete |
 | **Evaluation** | 25-question golden dataset, Ragas metrics, LLM-as-judge | ✅ Complete |
 | **Agent** | LangGraph orchestration — classifier, router, validator | ✅ Complete |
@@ -92,7 +95,7 @@ PDF corpus → pymupdf4llm extraction → German-aware cleaning
 | Logging | `structlog` | JSON logs, Loki-compatible for EKS observability |
 | Vector DB | Qdrant 🇩🇪 | German-founded, native hybrid search, EU-resident |
 | Embeddings | `multilingual-e5-large-instruct` | Best open multilingual model, strong on German |
-| Reranker | `BAAI/bge-reranker-v2-m3` | Cross-encoder reranking, +8% P@1 over dense alone |
+| Reranker | `BAAI/bge-reranker-v2-m3` | Cross-encoder reranking, +8 pp P@1 over dense alone (72% → 80%) |
 | LLM | Mistral Large 🇫🇷 | EU-sovereign, strong multilingual, DSGVO-compliant |
 | Local fallback | Llama 3.3 | Air-gapped / cost-sensitive scenarios |
 | Agent | LangGraph 0.3.34 | Stateful graph, conditional routing, auditable traces |
@@ -111,7 +114,7 @@ Eight Architecture Decision Records document every major choice. Selected highli
 Small children (≤256 tokens) for precise retrieval precision; large parents (full sections, ~627 tokens avg) for rich generation context. Context-prefix injection on every child chunk (`[DocTitle · SectionHeading]`) before embedding — free recall improvement with no extra infrastructure.
 
 **ADR-003 — Hybrid search + reranker**
-BM42 sparse model outperforms classic BM25 on German legal compound terms. Reranker adds +8% P@1 at 25 questions — statistically unambiguous. Key insight: reranker requires prefix-injected text (`text_for_embedding`), not raw text — consistent representation across all pipeline stages.
+BM42 sparse model outperforms classic BM25 on German legal compound terms. Reranker adds +8 percentage points P@1 (72% → 80%, 20 vs 18 of 25 questions) — directional at n=25, not statistically significant. Key insight: reranker requires prefix-injected text (`text_for_embedding`), not raw text — consistent representation across all pipeline stages.
 
 **ADR-008 — Parallel multi-article retrieval**
 Separation of concerns across two stages: article-scoped sub-queries (`Artikel N DSGVO`) for retrieval precision; original full query for reranking topic relevance. Conflating the two lets topic semantics override article identity in the embedding space. `ThreadPoolExecutor` over asyncio — `retrieve()` is sync/blocking; async adds complexity with no benefit until EKS async clients.

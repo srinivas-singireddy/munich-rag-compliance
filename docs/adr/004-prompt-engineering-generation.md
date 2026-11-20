@@ -1,6 +1,6 @@
 # ADR-004: Prompt Engineering and Generation Architecture
 
-**Date:** 2025-xx-xx  
+**Date:** 2026-05-14 
 **Status:** Accepted
 
 ## Context
