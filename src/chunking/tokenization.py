@@ -18,7 +18,9 @@ logging.getLogger("transformers.tokenization_utils_base").setLevel(logging.ERROR
 
 # This is the tokenizer for the embedding model we'll use on Day 4.
 # Loading it now ensures token counts during chunking are exact.
-EMBEDDING_MODEL_NAME = "intfloat/multilingual-e5-large-instruct"
+from src.embeddings.encoder import (
+    DENSE_MODEL_NAME as EMBEDDING_MODEL_NAME,
+)  # single source of truth
 
 
 @lru_cache(maxsize=1)

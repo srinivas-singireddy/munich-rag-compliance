@@ -15,11 +15,11 @@ Node responsibilities:
 from __future__ import annotations
 
 import json
-import os
 import re
 import structlog
 
 from mistralai import Mistral
+from src.config import settings
 
 from src.agent.article_parser import parse_article_refs
 from src.agent.parallel_retriever import parallel_retrieve
@@ -34,7 +34,12 @@ logger = structlog.get_logger(__name__)
 # Shared clients — initialised once at module load
 # ---------------------------------------------------------------------------
 
-_mistral_client = Mistral(api_key=os.environ["MISTRAL_API_KEY"])
+if settings.mistral_api_key is None:
+    raise RuntimeError("MISTRAL_API_KEY is not set (environment or .env) — the agent cannot start")
+_mistral_client = Mistral(
+    api_key=settings.mistral_api_key.get_secret_value(),
+    timeout_ms=settings.llm_timeout_seconds * 1000,
+)
 _qdrant_client = get_client()
 _generator = ComplianceGenerator()
 
@@ -76,7 +81,7 @@ def query_classifier(state: AgentState) -> dict:
 
     try:
         response = _mistral_client.chat.complete(
-            model="mistral-small-latest",
+            model=settings.mistral_model,
             messages=[
                 {"role": "system", "content": _CLASSIFIER_SYSTEM_PROMPT},
                 {"role": "user", "content": query},

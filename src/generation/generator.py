@@ -1,8 +1,8 @@
 """Mistral API integration with streaming + citation-grounded generation."""
 
 from __future__ import annotations
+from src.config import settings
 
-import os
 from collections.abc import Generator
 from typing import TYPE_CHECKING
 
@@ -59,12 +59,13 @@ def _build_context(parents: list[dict]) -> str:
 class ComplianceGenerator:
     """Wraps Mistral client; exposes generate() and stream()."""
 
-    def __init__(self, api_key: str | None = None, model: str = "mistral-small-latest") -> None:
-        key = api_key or os.environ.get("MISTRAL_API_KEY")
-        if not key:
-            raise ValueError("MISTRAL_API_KEY not set and no api_key passed")
-        self.client = Mistral(api_key=key)
-        self.model = model
+    def __init__(self, api_key: str | None = None, model: str | None = None) -> None:
+        if api_key is None and settings.mistral_api_key is not None:
+            api_key = settings.mistral_api_key.get_secret_value()
+        if not api_key:
+            raise ValueError("MISTRAL_API_KEY not set (environment or .env) and no api_key passed")
+        self.client = Mistral(api_key=api_key, timeout_ms=settings.llm_timeout_seconds * 1000)
+        self.model = model or settings.mistral_model
         log.info("generator.ready", model=self.model)
 
     def _messages(self, question: str, parents: list[dict]) -> list[dict]:

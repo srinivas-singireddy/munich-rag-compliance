@@ -18,6 +18,7 @@ from fastembed import SparseEmbedding, SparseTextEmbedding
 from sentence_transformers import SentenceTransformer
 
 from src.logging_setup import get_logger
+from src.config import settings
 
 log = get_logger(__name__)
 
@@ -47,7 +48,10 @@ def get_dense_model() -> SentenceTransformer:
 def get_sparse_model() -> SparseTextEmbedding:
     """Lazy-load the BM25 sparse model."""
     log.info("loading_sparse_model", model=SPARSE_MODEL_NAME)
-    return SparseTextEmbedding(model_name=SPARSE_MODEL_NAME)
+    return SparseTextEmbedding(
+        model_name=SPARSE_MODEL_NAME,
+        cache_dir=str(settings.model_cache_dir / "fastembed"),  # permanent, not $TMPDIR (L-017)
+    )
 
 
 def encode_passages_dense(

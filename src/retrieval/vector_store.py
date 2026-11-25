@@ -13,6 +13,7 @@ import json
 import time
 import uuid
 from pathlib import Path
+from src.config import settings
 
 from qdrant_client import QdrantClient
 from qdrant_client.http import models as qm
@@ -27,14 +28,18 @@ from src.logging_setup import get_logger
 
 log = get_logger(__name__)
 
-COLLECTION_NAME = "munich_rag_children"
+COLLECTION_NAME = settings.qdrant_collection
 DENSE_VECTOR_NAME = "dense"
 SPARSE_VECTOR_NAME = "sparse"
 
 
-def get_client(host: str = "localhost", port: int = 6333) -> QdrantClient:
-    """Create a Qdrant client connected to local docker-compose instance."""
-    return QdrantClient(host=host, port=port, timeout=30.0)
+def get_client(host: str | None = None, port: int | None = None) -> QdrantClient:
+    """(keep your existing docstring line here)"""
+    return QdrantClient(
+        host=host or settings.qdrant_host,
+        port=port or settings.qdrant_port,
+        timeout=30.0,
+    )
 
 
 def ensure_collection(client: QdrantClient, recreate: bool = False) -> None:
