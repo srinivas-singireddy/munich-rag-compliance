@@ -108,7 +108,7 @@ PDF corpus → pymupdf4llm extraction → German-aware cleaning
 
 ## Key engineering decisions
 
-Eight Architecture Decision Records document every major choice. Selected highlights:
+Nine Architecture Decision Records document every major choice. Selected highlights:
 
 **ADR-001 — Hierarchical parent-child chunking**
 Small children (≤256 tokens) for precise retrieval precision; large parents (full sections, ~627 tokens avg) for rich generation context. Context-prefix injection on every child chunk (`[DocTitle · SectionHeading]`) before embedding — free recall improvement with no extra infrastructure.

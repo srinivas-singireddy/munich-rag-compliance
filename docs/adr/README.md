@@ -17,6 +17,7 @@ deliberately compressed for portfolio/sprint pace.
 | 006 | Agent orchestration with LangGraph | Accepted | 2026-06-02 |
 | 008 | Parallel multi-article retrieval | Accepted | 2026-06-04 |
 | 011 | Deterministic tie-breaking in hybrid search | Accepted | 2026-11-20 |
+| 012 | Configuration vs code constants | Accepted | 2026-11-25 |
 
 ## Conventions
 

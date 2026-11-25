@@ -573,9 +573,13 @@ contradicting the local / EU-sovereign claim — and would add a cold download t
 every CI run and container start.
 
 **Resolution**
-Not yet fixed. Planned for D3 (config externalisation): explicit cache directory
-via Settings; reproducibility runs with `HF_HUB_OFFLINE=1` so a missing model
-fails loudly. The container (D11) mounts a writable cache volume.
+Fixed on 2026-11-25 (D3, config externalisation). `get_sparse_model()` now passes
+`cache_dir=settings.model_cache_dir / "fastembed"` (default
+`~/.cache/munich-rag/models/fastembed`). The existing 87 MB cache was copied over.
+Verified with `HF_HUB_OFFLINE=1`: BM42 loads and the full retrieval eval runs with
+zero downloads (P@1 80%, R@5 88%, MRR 0.828 unchanged). The Hugging Face models
+(dense, reranker, tokenizer) already use the permanent `~/.cache/huggingface`;
+containers set `HF_HOME` to a mounted volume (D11).
 
 **Takeaway**
 Library defaults for caches are dev conveniences, not deployment decisions. Pin
